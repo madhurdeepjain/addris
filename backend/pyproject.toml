@@ -1,0 +1,52 @@
+[project]
+name = "addris-backend"
+version = "0.1.0"
+description = "Backend API for the Addris address OCR and routing system"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "Addris Team" }]
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "pytesseract>=0.3.10",
+    "Pillow>=10.0.0",
+    "opencv-python-headless>=4.9.0.80",
+    "python-multipart>=0.0.9",
+    "pydantic[email]>=2.8.0",
+    "pydantic-settings>=2.5.0",
+    "orjson>=3.10.0",
+    "httpx>=0.27.0",
+    "geopy>=2.4.1",
+    "requests>=2.32.3",
+    "postal>=1.1.10",
+    "scikit-image>=0.24.0",
+    "numpy>=1.26.0",
+    "cachetools>=5.3.0",
+    "tenacity>=8.3.0",
+    "ortools>=9.10.4067",
+    "structlog>=24.1.0",
+    "python-dotenv>=1.0.1",
+    "rich>=13.7.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.23.8",
+    "ruff>=0.5.5",
+    "mypy>=1.10.0",
+    "types-requests>=2.32.0",
+    "types-cachetools>=5.3.0",
+    "httpx[cli]>=0.27.0",
+]
+
+[build-system]
+requires = ["setuptools>=68", "wheel>=0.42"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+exclude = ["data"]
+
+[tool.uv]
+index-url = "https://pypi.org/simple"
+python-preference = "managed"
