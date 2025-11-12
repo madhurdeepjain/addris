@@ -219,6 +219,9 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
+# Data
+data/
+
 ##############
 ### Mobile ###
 ##############
@@ -262,3 +265,5 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+data/

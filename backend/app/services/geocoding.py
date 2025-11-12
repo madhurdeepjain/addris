@@ -36,10 +36,12 @@ async def geocode_address(
         return GeocodeResult(None, None, 0.0, message="No address components available")
 
     query = _compose_query(parsed, raw_text)
+    _logger.info("Geocoding lookup", query=query)
 
     async with _cache_lock:
         cached = _cache.get(query)
     if cached:
+        _logger.info("Geocoding cache hit", query=query)
         return cached
 
     try:
@@ -50,6 +52,14 @@ async def geocode_address(
 
     async with _cache_lock:
         _cache[query] = result
+    _logger.info(
+        "Geocoding success",
+        query=query,
+        latitude=result.latitude,
+        longitude=result.longitude,
+        confidence=result.confidence,
+        message=result.message,
+    )
     return result
 
 

@@ -5,7 +5,11 @@ from typing import Iterable, Sequence
 
 from ortools.constraint_solver import pywrapcp, routing_enums_pb2
 
+from app.core.logging import get_logger
 from app.schemas.jobs import RouteLeg
+
+
+_logger = get_logger(__name__)
 
 
 def compute_route(
@@ -19,11 +23,20 @@ def compute_route(
         if lat is not None and lon is not None
     ]
 
+    _logger.info("Route computation started", nodes=len(nodes))
+
     if not nodes:
+        _logger.info("Route computation skipped", reason="no valid coordinates")
         return []
 
     if len(nodes) == 1:
         label, lat, lon = nodes[0]
+        _logger.info(
+            "Route computation single node",
+            label=label,
+            latitude=lat,
+            longitude=lon,
+        )
         return [
             RouteLeg(
                 order=0,
@@ -60,6 +73,7 @@ def compute_route(
 
     solution = routing.SolveWithParameters(search_parameters)
     if not solution:
+        _logger.warning("Route solver fallback", nodes=len(nodes))
         return _fallback_route(nodes)
 
     order = 0
@@ -92,6 +106,7 @@ def compute_route(
         order += 1
         index = solution.Value(routing.NextVar(index))
 
+    _logger.info("Route computation finished", legs=len(route))
     return route
 
 

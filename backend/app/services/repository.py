@@ -9,6 +9,7 @@ from threading import Lock
 from typing import Generator, Iterable
 from uuid import UUID
 
+from app.core.logging import get_logger
 from app.schemas.jobs import AddressCandidate, RouteLeg
 from app.services.models import JobRecord
 
@@ -21,6 +22,7 @@ class JobRepository:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = Lock()
         self._ensure_schema()
+        self._logger = get_logger(__name__)
 
     @contextmanager
     def _connect(self) -> Generator[sqlite3.Connection, None, None]:
@@ -89,6 +91,11 @@ class JobRepository:
                 payload,
             )
             conn.commit()
+        self._logger.info(
+            "Job record persisted",
+            job_id=str(record.job_id),
+            status=record.status,
+        )
 
     def get(self, job_id: UUID) -> JobRecord | None:
         with self._lock, self._connect() as conn:
@@ -96,15 +103,20 @@ class JobRepository:
                 "SELECT * FROM jobs WHERE job_id = ?", (str(job_id),)
             ).fetchone()
         if row is None:
+            self._logger.info("Job record not found", job_id=str(job_id))
             return None
-        return self._row_to_record(row)
+        record = self._row_to_record(row)
+        self._logger.info("Job record loaded", job_id=str(job_id), status=record.status)
+        return record
 
     def list(self) -> Iterable[JobRecord]:
         with self._lock, self._connect() as conn:
             rows = conn.execute(
                 "SELECT * FROM jobs ORDER BY created_at DESC"
             ).fetchall()
-        return [self._row_to_record(row) for row in rows]
+        records = [self._row_to_record(row) for row in rows]
+        self._logger.info("Job records loaded", count=len(records))
+        return records
 
     @staticmethod
     def _row_to_record(row: sqlite3.Row) -> JobRecord:

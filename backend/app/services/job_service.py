@@ -81,6 +81,14 @@ class JobService:
 
         await self._persist(record)
 
+        _logger.info(
+            "Job created",
+            job_id=str(job_id),
+            image_path=str(image_path),
+            origin=origin,
+            background=self._run_in_background,
+        )
+
         if self._run_in_background:
             asyncio.create_task(self._process_job(job_id))
         else:
@@ -116,8 +124,16 @@ class JobService:
             record.updated_at = datetime.now(timezone.utc)
         await self._persist(record)
 
+        _logger.info("Job processing started", job_id=str(job_id))
+
         try:
             ocr_results = await asyncio.to_thread(self._ocr_runner, record.image_path)
+            _logger.info(
+                "OCR results received",
+                job_id=str(job_id),
+                candidates=len(ocr_results),
+                preview=[text for text, _ in ocr_results[:3]],
+            )
             addresses: list[AddressCandidate] = []
 
             for text, confidence in ocr_results:
@@ -134,6 +150,16 @@ class JobService:
                 else:
                     parse_error_message = None
 
+                log_payload = {
+                    "job_id": str(job_id),
+                    "text": text,
+                    "confidence": confidence,
+                    "parsed": parsed,
+                }
+                if parse_error_message:
+                    log_payload["parse_error"] = parse_error_message
+                _logger.info("Address parsed", **log_payload)
+
                 geocode_result = (
                     await self._geocoder(parsed, text)
                     if parsed
@@ -143,6 +169,17 @@ class JobService:
                         0.0,
                         message=parse_error_message or "Unrecognized address",
                     )
+                )
+
+                _logger.info(
+                    "Geocoding completed",
+                    job_id=str(job_id),
+                    text=text,
+                    latitude=geocode_result.latitude,
+                    longitude=geocode_result.longitude,
+                    confidence=geocode_result.confidence,
+                    message=geocode_result.message,
+                    resolved_label=geocode_result.resolved_label,
                 )
 
                 base_confidence = max(0.0, min(1.0, confidence))
@@ -195,6 +232,13 @@ class JobService:
 
             route = await asyncio.to_thread(self._router, route_inputs)
 
+            _logger.info(
+                "Route computed",
+                job_id=str(job_id),
+                legs=len(route),
+                with_origin=bool(record.origin),
+            )
+
             async with self._lock:
                 record = self._jobs[job_id]
                 record.addresses = addresses
@@ -203,13 +247,20 @@ class JobService:
                 record.updated_at = datetime.now(timezone.utc)
             await self._persist(record)
 
+            _logger.info("Job completed", job_id=str(job_id))
+
         except Exception as exc:  # pylint: disable=broad-except
             async with self._lock:
                 record = self._jobs[job_id]
                 record.errors.append(str(exc))
                 record.status = "failed"
                 record.updated_at = datetime.now(timezone.utc)
-            _logger.error("Job processing failed", job_id=str(job_id), error=str(exc))
+            _logger.error(
+                "Job processing failed",
+                job_id=str(job_id),
+                error=str(exc),
+                exc_info=True,
+            )
             await self._persist(record)
 
     async def _persist(self, record: JobRecord) -> None:
