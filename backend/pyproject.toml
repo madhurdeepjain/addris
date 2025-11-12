@@ -11,6 +11,7 @@ dependencies = [
     "pytesseract>=0.3.10",
     "Pillow>=10.0.0",
     "opencv-python-headless>=4.9.0.80",
+    "easyocr>=1.7.1",
     "python-multipart>=0.0.9",
     "pydantic[email]>=2.8.0",
     "pydantic-settings>=2.5.0",

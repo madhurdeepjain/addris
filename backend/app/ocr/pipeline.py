@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence, TYPE_CHECKING
 
 import cv2
 import numpy as np
@@ -15,7 +15,12 @@ from app.core.logging import get_logger
 
 _TESSERACT_CONFIG = "--oem 3 --psm 6"
 _MAX_RESULTS = 10
+_EASYOCR_LANGUAGES = ("en",)
 _logger = get_logger(__name__)
+_easyocr_reader: Any = None
+
+if TYPE_CHECKING:
+    from easyocr import Reader
 
 
 @dataclass(slots=True)
@@ -31,7 +36,9 @@ def run_ocr(image_path: Path) -> Sequence[tuple[str, float]]:
     backend = settings.ocr_backend
     _logger.info("OCR starting", backend=backend, image_path=str(image_path))
 
-    if backend == "tesseract":
+    if backend == "easyocr":
+        results = _run_with_easyocr(image_path)
+    elif backend == "tesseract":
         results = _run_with_tesseract(image_path)
     else:
         raise ValueError(f"Unsupported OCR backend: {backend}")
@@ -67,6 +74,61 @@ def _run_with_tesseract(image_path: Path) -> Sequence[tuple[str, float]]:
     results = [(line.text, line.confidence) for line in lines[:_MAX_RESULTS]]
     _logger.debug("Tesseract candidates", count=len(results))
     return results
+
+
+def _get_easyocr_reader() -> "Reader":
+    global _easyocr_reader
+    if _easyocr_reader is not None:
+        return _easyocr_reader  # type: ignore[return-value]
+
+    try:
+        import easyocr
+    except ImportError as exc:  # pragma: no cover - import path varies per env
+        raise RuntimeError(
+            "EasyOCR backend selected but the 'easyocr' package is not installed."
+        ) from exc
+
+    try:
+        reader: "Reader" = easyocr.Reader(list(_EASYOCR_LANGUAGES), gpu=False)
+    except Exception as exc:  # pragma: no cover - depends on system setup
+        _logger.error("EasyOCR initialization failed", error=str(exc))
+        raise RuntimeError(f"Unable to initialize EasyOCR: {exc}") from exc
+
+    _easyocr_reader = reader
+    return reader
+
+
+def _run_with_easyocr(image_path: Path) -> Sequence[tuple[str, float]]:
+    reader = _get_easyocr_reader()
+
+    try:
+        results = reader.readtext(str(image_path), detail=1, paragraph=True)
+    except FileNotFoundError:
+        _logger.error("Image read failed", image_path=str(image_path))
+        raise
+    except Exception as exc:  # pragma: no cover - backend may raise varied errors
+        _logger.error("EasyOCR execution failed", error=str(exc))
+        raise RuntimeError(f"EasyOCR OCR failed: {exc}") from exc
+
+    lines: list[OCRLine] = []
+    for candidate in results:
+        if not isinstance(candidate, (list, tuple)) or len(candidate) < 3:
+            continue
+        _, text, confidence = candidate[:3]
+        normalized_text = str(text).strip()
+        if not normalized_text:
+            continue
+        try:
+            conf_value = float(confidence)
+        except (TypeError, ValueError):
+            continue
+        clamped_conf = max(0.0, min(1.0, conf_value))
+        lines.append(OCRLine(normalized_text, clamped_conf))
+
+    lines.sort(key=lambda item: item.confidence, reverse=True)
+    trimmed = [(line.text, line.confidence) for line in lines[:_MAX_RESULTS]]
+    _logger.debug("EasyOCR candidates", count=len(trimmed))
+    return trimmed
 
 
 def _preprocess(image: np.ndarray) -> np.ndarray:

@@ -26,7 +26,9 @@ class Settings(BaseSettings):
         None, alias="ADDRIS_ROUTE_SERVICE_API_KEY"
     )
 
-    ocr_backend: Literal["tesseract"] = Field("tesseract", alias="ADDRIS_OCR_BACKEND")
+    ocr_backend: Literal["easyocr", "tesseract"] = Field(
+        "easyocr", alias="ADDRIS_OCR_BACKEND"
+    )
 
     environment: Literal["dev", "prod", "test"] = Field("dev", alias="ADDRIS_ENV")
 

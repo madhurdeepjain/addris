@@ -5,7 +5,7 @@ FastAPI backend that powers the Addris address extraction and routing system. Th
 ## Requirements
 
 - Python 3.10+ (managed via [`uv`](https://docs.astral.sh/uv/))
-- Tesseract OCR engine installed on the host (macOS: `brew install tesseract`)
+- Optional: Tesseract OCR engine installed on the host (macOS: `brew install tesseract`) when using the Tesseract backend
 - Libpostal native library (macOS: `brew install libpostal`)
 - Optional: `libomp` (`brew install libomp`) for OpenCV performance
 
@@ -34,7 +34,7 @@ Create a `.env` file (see `.env.example`) to configure services.
 | `ADDRIS_GEOCODER_EMAIL`        | Contact email required by public Nominatim                                |
 | `ADDRIS_ROUTE_SERVICE_URL`     | Base URL for matrix/route service (default OpenRouteService)              |
 | `ADDRIS_ROUTE_SERVICE_API_KEY` | API key when using OpenRouteService                                       |
-| `ADDRIS_OCR_BACKEND`           | OCR engine to use (`tesseract` or `deepseek`, defaults to `tesseract`)    |
+| `ADDRIS_OCR_BACKEND`           | OCR engine to use (`easyocr` or `tesseract`, defaults to `easyocr`)       |
 
 ## Project layout
 
