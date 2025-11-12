@@ -34,6 +34,7 @@ Create a `.env` file (see `.env.example`) to configure services.
 | `ADDRIS_GEOCODER_EMAIL`        | Contact email required by public Nominatim                                |
 | `ADDRIS_ROUTE_SERVICE_URL`     | Base URL for matrix/route service (default OpenRouteService)              |
 | `ADDRIS_ROUTE_SERVICE_API_KEY` | API key when using OpenRouteService                                       |
+| `ADDRIS_OCR_BACKEND`           | OCR engine to use (`tesseract` or `deepseek`, defaults to `tesseract`)    |
 
 ## Project layout
 

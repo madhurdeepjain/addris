@@ -9,9 +9,13 @@ import numpy as np
 import pytesseract
 from pytesseract import Output
 
+from app.core.config import get_settings
+from app.core.logging import get_logger
+
 
 _TESSERACT_CONFIG = "--oem 3 --psm 6"
 _MAX_RESULTS = 10
+_logger = get_logger(__name__)
 
 
 @dataclass(slots=True)
@@ -21,10 +25,30 @@ class OCRLine:
 
 
 def run_ocr(image_path: Path) -> Sequence[tuple[str, float]]:
-    """Run OCR on an image and return up to 10 high-confidence lines."""
+    """Run OCR on an image with the configured backend."""
 
+    settings = get_settings()
+    backend = settings.ocr_backend
+    _logger.info("OCR starting", backend=backend, image_path=str(image_path))
+
+    if backend == "tesseract":
+        results = _run_with_tesseract(image_path)
+    else:
+        raise ValueError(f"Unsupported OCR backend: {backend}")
+
+    _logger.info(
+        "OCR completed",
+        backend=backend,
+        image_path=str(image_path),
+        candidates=len(results),
+    )
+    return results
+
+
+def _run_with_tesseract(image_path: Path) -> Sequence[tuple[str, float]]:
     image = cv2.imread(str(image_path))
     if image is None:
+        _logger.error("Image read failed", image_path=str(image_path))
         raise FileNotFoundError(f"Unable to read image: {image_path}")
 
     oriented = _correct_orientation(image)
@@ -35,11 +59,14 @@ def run_ocr(image_path: Path) -> Sequence[tuple[str, float]]:
             processed, output_type=Output.DICT, config=_TESSERACT_CONFIG
         )
     except pytesseract.TesseractError as exc:
+        _logger.error("Tesseract execution failed", error=str(exc))
         raise RuntimeError(f"Tesseract OCR failed: {exc}") from exc
 
     lines = _aggregate_lines(ocr_data)
     lines.sort(key=lambda item: item.confidence, reverse=True)
-    return [(line.text, line.confidence) for line in lines[:_MAX_RESULTS]]
+    results = [(line.text, line.confidence) for line in lines[:_MAX_RESULTS]]
+    _logger.debug("Tesseract candidates", count=len(results))
+    return results
 
 
 def _preprocess(image: np.ndarray) -> np.ndarray:
@@ -57,6 +84,7 @@ def _correct_orientation(image: np.ndarray) -> np.ndarray:
     try:
         osd = pytesseract.image_to_osd(image)
     except pytesseract.TesseractError:
+        _logger.debug("Orientation detection skipped")
         return image
 
     angle = 0
@@ -69,6 +97,7 @@ def _correct_orientation(image: np.ndarray) -> np.ndarray:
             break
 
     if angle and angle % 360 != 0:
+        _logger.debug("Rotating image", angle=angle)
         return _rotate(image, -angle)
     return image
 
