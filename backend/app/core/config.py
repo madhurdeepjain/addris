@@ -17,7 +17,6 @@ class Settings(BaseSettings):
     geocoder_provider: Literal["google", "nominatim"] = Field(
         "nominatim", alias="ADDRIS_GEOCODER_PROVIDER"
     )
-    geocoder_api_key: str | None = Field(None, alias="ADDRIS_GEOCODER_API_KEY")
     geocoder_user_agent: str = Field(
         "addris-geocoder", alias="ADDRIS_GEOCODER_USER_AGENT"
     )
@@ -27,6 +26,15 @@ class Settings(BaseSettings):
     ocr_backend: Literal["easyocr", "tesseract"] = Field(
         "easyocr", alias="ADDRIS_OCR_BACKEND"
     )
+
+    routing_distance_provider: Literal["google", "haversine"] = Field(
+        "google", alias="ADDRIS_ROUTING_DISTANCE_PROVIDER"
+    )
+    google_maps_api_key: str | None = Field(None, alias="ADDRIS_GOOGLE_MAPS_API_KEY")
+    routing_distance_timeout: float = Field(
+        10.0, alias="ADDRIS_ROUTING_DISTANCE_TIMEOUT"
+    )
+    routing_use_traffic: bool = Field(True, alias="ADDRIS_ROUTING_USE_TRAFFIC")
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -43,6 +51,12 @@ class Settings(BaseSettings):
 
     @field_validator("geocoder_provider", mode="before")
     def _normalize_provider(cls, value: str) -> str:
+        if isinstance(value, str):
+            return value.strip().lower()
+        return value
+
+    @field_validator("routing_distance_provider", mode="before")
+    def _normalize_distance_provider(cls, value: str) -> str:
         if isinstance(value, str):
             return value.strip().lower()
         return value

@@ -231,7 +231,7 @@ def _create_geocoder(settings: "Settings") -> Geocoder:
     user_agent = settings.geocoder_user_agent or "addris-geocoder"
 
     if provider == "google":
-        api_key = _require_api_key(provider, settings.geocoder_api_key)
+        api_key = _require_google_maps_key(settings.google_maps_api_key)
         geocoder_cls = get_geocoder_for_service("googlev3")
         kwargs = {"api_key": api_key, "timeout": timeout, "user_agent": user_agent}
         if settings.geocoder_domain:
@@ -243,18 +243,16 @@ def _create_geocoder(settings: "Settings") -> Geocoder:
         kwargs = {"user_agent": user_agent, "timeout": timeout}
         if settings.geocoder_domain:
             kwargs["domain"] = settings.geocoder_domain
-        if settings.geocoder_api_key:
-            kwargs["api_key"] = settings.geocoder_api_key
         return geocoder_cls(**kwargs)
 
     raise GeocodeConfigurationError(f"Unsupported geocoder provider '{provider}'")
 
 
-def _require_api_key(provider: str, value: str | None) -> str:
+def _require_google_maps_key(value: str | None) -> str:
     if value and value.strip():
         return value.strip()
     raise GeocodeConfigurationError(
-        f"Geocoder provider '{provider}' requires ADDRIS_GEOCODER_API_KEY to be set"
+        "Geocoder provider 'google' requires ADDRIS_GOOGLE_MAPS_API_KEY to be set"
     )
 
 

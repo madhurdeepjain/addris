@@ -41,7 +41,8 @@ async def create_route(payload: RouteRequest) -> RouteResponse:
             status.HTTP_400_BAD_REQUEST, "No valid coordinates provided"
         )
 
-    route = await asyncio.to_thread(compute_route, nodes)
+    result = await asyncio.to_thread(compute_route, nodes)
+    route = list(result.legs)
     total_distance = sum(
         leg.distance_meters or 0.0 for leg in route if leg.distance_meters is not None
     )
@@ -49,8 +50,10 @@ async def create_route(payload: RouteRequest) -> RouteResponse:
         leg.eta_seconds or 0 for leg in route if leg.eta_seconds is not None
     )
     return RouteResponse(
-        route=list(route),
+        route=route,
         total_distance_meters=total_distance,
         total_eta_seconds=total_eta,
         origin_address=origin_address,
+        distance_provider=result.distance_provider,
+        uses_live_traffic=result.uses_live_traffic,
     )

@@ -1,20 +1,38 @@
 from __future__ import annotations
 
-from math import atan2, cos, radians, sin, sqrt
+from dataclasses import dataclass
 from typing import Iterable, Sequence
 
 from ortools.constraint_solver import pywrapcp, routing_enums_pb2
 
+from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.schemas.jobs import RouteLeg
+from app.services.distance import DistanceMatrixResult, get_distance_matrix
 
 
 _logger = get_logger(__name__)
 
 
+@dataclass(slots=True)
+class RouteComputationResult(Sequence[RouteLeg]):
+    legs: list[RouteLeg]
+    distance_provider: str
+    uses_live_traffic: bool
+
+    def __iter__(self):  # pragma: no cover - delegating to list iterator
+        return iter(self.legs)
+
+    def __len__(self) -> int:  # pragma: no cover - delegating to list length
+        return len(self.legs)
+
+    def __getitem__(self, index: int) -> RouteLeg:  # pragma: no cover
+        return self.legs[index]
+
+
 def compute_route(
     addresses: Iterable[tuple[str, float | None, float | None]],
-) -> Sequence[RouteLeg]:
+) -> RouteComputationResult:
     """Solve a single-vehicle TSP to minimize travel distance between stops."""
 
     nodes = [
@@ -27,7 +45,8 @@ def compute_route(
 
     if not nodes:
         _logger.info("Route computation skipped", reason="no valid coordinates")
-        return []
+        settings = get_settings()
+        return RouteComputationResult([], settings.routing_distance_provider, False)
 
     if len(nodes) == 1:
         label, lat, lon = nodes[0]
@@ -37,20 +56,23 @@ def compute_route(
             latitude=lat,
             longitude=lon,
         )
-        return [
-            RouteLeg(
-                order=0,
-                label=label,
-                latitude=lat,
-                longitude=lon,
-                eta_seconds=0,
-                distance_meters=0.0,
-                cumulative_eta_seconds=0,
-                cumulative_distance_meters=0.0,
-            )
-        ]
+        leg = RouteLeg(
+            order=0,
+            label=label,
+            latitude=lat,
+            longitude=lon,
+            eta_seconds=0,
+            distance_meters=0.0,
+            cumulative_eta_seconds=0,
+            cumulative_distance_meters=0.0,
+        )
+        settings = get_settings()
+        return RouteComputationResult([leg], settings.routing_distance_provider, False)
 
-    distance_matrix = _build_distance_matrix(nodes)
+    matrix = get_distance_matrix(nodes)
+    distance_matrix = matrix.distances
+    duration_matrix = matrix.durations
+
     depot_index = 0
 
     manager = pywrapcp.RoutingIndexManager(len(nodes), 1, depot_index)
@@ -76,13 +98,13 @@ def compute_route(
     solution = routing.SolveWithParameters(search_parameters)
     if not solution:
         _logger.warning("Route solver fallback", nodes=len(nodes))
-        return _fallback_route(nodes)
+        legs = _fallback_route(nodes, matrix)
+        return RouteComputationResult(legs, matrix.provider, matrix.uses_live_traffic)
 
     order = 0
     index = routing.Start(0)
     route: list[RouteLeg] = []
     prev_node = None
-    average_speed_mps = 11.11  # ~40 km/h
     cumulative_distance = 0.0
     cumulative_eta = 0
 
@@ -91,74 +113,14 @@ def compute_route(
         label, lat, lon = nodes[node_index]
 
         distance_meters = 0.0
+        eta_seconds = 0
         if prev_node is not None:
-            distance_meters = distance_matrix[prev_node][node_index]
-        distance_value = float(distance_meters)
-        cumulative_distance += distance_value
-        eta_seconds = int(distance_value / average_speed_mps) if distance_value else 0
+            distance_meters = float(distance_matrix[prev_node][node_index])
+            eta_seconds = int(duration_matrix[prev_node][node_index])
+        cumulative_distance += distance_meters
         cumulative_eta += eta_seconds
 
         route.append(
-            RouteLeg(
-                order=order,
-                label=label,
-                latitude=lat,
-                longitude=lon,
-                eta_seconds=eta_seconds,
-                distance_meters=distance_value,
-                cumulative_eta_seconds=cumulative_eta,
-                cumulative_distance_meters=cumulative_distance,
-            )
-        )
-
-        prev_node = node_index
-        order += 1
-        index = solution.Value(routing.NextVar(index))
-
-    _logger.info("Route computation finished", legs=len(route))
-    return route
-
-
-def _build_distance_matrix(nodes: list[tuple[str, float, float]]) -> list[list[int]]:
-    count = len(nodes)
-    matrix = [[0] * count for _ in range(count)]
-    for i in range(count):
-        for j in range(count):
-            if i == j:
-                continue
-            _, lat_a, lon_a = nodes[i]
-            _, lat_b, lon_b = nodes[j]
-            matrix[i][j] = int(round(_haversine(lat_a, lon_a, lat_b, lon_b)))
-    return matrix
-
-
-def _haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    radius = 6371000.0
-    lat1_rad, lon1_rad = radians(lat1), radians(lon1)
-    lat2_rad, lon2_rad = radians(lat2), radians(lon2)
-
-    dlat = lat2_rad - lat1_rad
-    dlon = lon2_rad - lon1_rad
-
-    a = sin(dlat / 2) ** 2 + cos(lat1_rad) * cos(lat2_rad) * sin(dlon / 2) ** 2
-    c = 2 * atan2(sqrt(a), sqrt(1 - a))
-    return radius * c
-
-
-def _fallback_route(nodes: list[tuple[str, float, float]]) -> list[RouteLeg]:
-    legs: list[RouteLeg] = []
-    prev: tuple[str, float, float] | None = None
-    average_speed_mps = 11.11
-    cumulative_distance = 0.0
-    cumulative_eta = 0
-    for order, (label, lat, lon) in enumerate(nodes):
-        distance_meters = 0.0
-        if prev is not None:
-            distance_meters = _haversine(prev[1], prev[2], lat, lon)
-        cumulative_distance += distance_meters
-        eta_seconds = int(distance_meters / average_speed_mps) if distance_meters else 0
-        cumulative_eta += eta_seconds
-        legs.append(
             RouteLeg(
                 order=order,
                 label=label,
@@ -170,5 +132,45 @@ def _fallback_route(nodes: list[tuple[str, float, float]]) -> list[RouteLeg]:
                 cumulative_distance_meters=cumulative_distance,
             )
         )
-        prev = (label, lat, lon)
+
+        prev_node = node_index
+        order += 1
+        index = solution.Value(routing.NextVar(index))
+
+    _logger.info(
+        "Route computation finished",
+        legs=len(route),
+        provider=matrix.provider,
+        live_traffic=matrix.uses_live_traffic,
+    )
+    return RouteComputationResult(route, matrix.provider, matrix.uses_live_traffic)
+
+
+def _fallback_route(
+    nodes: Sequence[tuple[str, float, float]],
+    matrix: DistanceMatrixResult,
+) -> list[RouteLeg]:
+    legs: list[RouteLeg] = []
+    cumulative_distance = 0.0
+    cumulative_eta = 0
+    for index, (label, lat, lon) in enumerate(nodes):
+        distance_meters = 0.0
+        eta_seconds = 0
+        if index > 0:
+            distance_meters = float(matrix.distances[index - 1][index])
+            eta_seconds = int(matrix.durations[index - 1][index])
+        cumulative_distance += distance_meters
+        cumulative_eta += eta_seconds
+        legs.append(
+            RouteLeg(
+                order=index,
+                label=label,
+                latitude=lat,
+                longitude=lon,
+                eta_seconds=eta_seconds,
+                distance_meters=distance_meters,
+                cumulative_eta_seconds=cumulative_eta,
+                cumulative_distance_meters=cumulative_distance,
+            )
+        )
     return legs

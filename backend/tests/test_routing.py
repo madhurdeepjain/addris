@@ -8,10 +8,12 @@ def test_compute_route_orders_origin_first():
         ("Stop B", 37.7680, -122.4300),
     ]
 
-    route = compute_route(addresses)
+    result = compute_route(addresses)
+    route = list(result)
 
     assert route, "Route should not be empty"
     assert route[0].label == "Origin"
     labels = {leg.label for leg in route}
     assert labels == {"Origin", "Stop A", "Stop B"}
     assert route[0].cumulative_distance_meters == 0.0
+    assert result.distance_provider in {"google", "haversine"}

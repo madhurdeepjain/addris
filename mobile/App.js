@@ -285,6 +285,8 @@ function WorkflowScreen() {
         totalDistanceMeters: data.total_distance_meters ?? null,
         totalEtaSeconds: data.total_eta_seconds ?? null,
         originAddress: locationLabel ?? data.origin_address ?? null,
+        distanceProvider: data.distance_provider ?? null,
+        usesLiveTraffic: Boolean(data.uses_live_traffic),
       });
     },
     onError: (error) => {
@@ -725,6 +727,22 @@ function WorkflowScreen() {
     }
     return `${Math.max(1, minutes)}m`;
   }, []);
+
+  const providerLabel = useMemo(() => {
+    const provider = routeSummary?.distanceProvider;
+    if (!provider) {
+      return null;
+    }
+    const normalized = provider.toLowerCase();
+    if (normalized === 'google') {
+      return 'Google Maps';
+    }
+    if (normalized === 'haversine') {
+      return 'Geodesic';
+    }
+    return provider.replace(/_/g, ' ');
+  }, [routeSummary?.distanceProvider]);
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <ScrollView contentContainerStyle={styles.container}>
@@ -939,10 +957,15 @@ function WorkflowScreen() {
               >
                 <MaterialCommunityIcons name="map-marker-check-outline" size={16} color="#166534" />
                 <Text style={styles.statusPillReadyText}>Route ready</Text>
-                {routeSummary?.totalDistanceMeters != null && (
+                {routeSummary?.totalDistanceMeters != null ? (
                   <Text style={styles.statusPillReadyMeta}>
                     {formatDistance(routeSummary.totalDistanceMeters)}
+                    {routeSummary?.usesLiveTraffic ? ' • Live traffic' : ''}
                   </Text>
+                ) : (
+                  routeSummary?.usesLiveTraffic && (
+                    <Text style={styles.statusPillReadyMeta}>Live traffic</Text>
+                  )
                 )}
                 <Text style={styles.statusPillReadyAction}>View</Text>
               </Pressable>
@@ -1242,14 +1265,14 @@ function WorkflowScreen() {
             </View>
             {routeSummary && (
               <View style={styles.routeSummaryCard}>
-                {routeSummary.originAddress ? (
+                {/* {routeSummary.originAddress ? (
                   <View style={styles.routeSummaryRow}>
                     <MaterialCommunityIcons name="crosshairs-gps" size={18} color="#166534" />
                     <Text style={styles.routeSummaryText} numberOfLines={2}>
                       {routeSummary.originAddress}
                     </Text>
                   </View>
-                ) : null}
+                ) : null} */}
                 <View style={styles.routeSummaryMetrics}>
                   {routeSummary.totalDistanceMeters != null && (
                     <View style={styles.routeSummaryMetric}>
@@ -1268,6 +1291,28 @@ function WorkflowScreen() {
                     </View>
                   )}
                 </View>
+                {(routeSummary.distanceProvider || routeSummary.usesLiveTraffic) && (
+                  <View style={styles.routeSummaryTags}>
+                    {routeSummary.distanceProvider ? (
+                      <View style={styles.routeSummaryTag}>
+                        <MaterialCommunityIcons
+                          name={routeSummary.distanceProvider === 'google' ? 'google-maps' : 'map-marker-distance'}
+                          size={14}
+                          color="#0f172a"
+                        />
+                        <Text style={styles.routeSummaryTagText}>
+                          {providerLabel ?? routeSummary.distanceProvider}
+                        </Text>
+                      </View>
+                    ) : null}
+                    {routeSummary.usesLiveTraffic ? (
+                      <View style={[styles.routeSummaryTag, styles.routeSummaryTagTraffic]}>
+                        <MaterialCommunityIcons name="traffic-light" size={14} color="#14532d" />
+                        <Text style={styles.routeSummaryTagTrafficText}>Live traffic</Text>
+                      </View>
+                    ) : null}
+                  </View>
+                )}
               </View>
             )}
             <ScrollView style={styles.modalScroll}>
@@ -2037,6 +2082,34 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '700',
     color: '#0f172a',
+  },
+  routeSummaryTags: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 10,
+  },
+  routeSummaryTag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    backgroundColor: '#e2e8f0',
+  },
+  routeSummaryTagText: {
+    fontSize: 12,
+    color: '#0f172a',
+    fontWeight: '600',
+  },
+  routeSummaryTagTraffic: {
+    backgroundColor: '#dcfce7',
+  },
+  routeSummaryTagTrafficText: {
+    fontSize: 12,
+    color: '#166534',
+    fontWeight: '600',
   },
   modalAddressMeta: {
     fontSize: 13,

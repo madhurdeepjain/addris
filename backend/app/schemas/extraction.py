@@ -32,3 +32,5 @@ class RouteResponse(BaseModel):
     total_distance_meters: float = 0.0
     total_eta_seconds: int | None = None
     origin_address: str | None = None
+    distance_provider: str | None = None
+    uses_live_traffic: bool = False

@@ -27,17 +27,18 @@ The first run will download Python if you do not already have a compatible inter
 
 Create a `.env` file (see `.env.example`) to configure services.
 
-| Variable                       | Description                                                               |
-| ------------------------------ | ------------------------------------------------------------------------- |
-| `ADDRIS_STORAGE_ROOT`          | Directory where uploaded images and intermediate artifacts will be stored |
-| `ADDRIS_GEOCODER_PROVIDER`     | Geocoding provider (`google`, `nominatim`)                                |
-| `ADDRIS_GEOCODER_API_KEY`      | API key for Google; optional for self-hosted Nominatim deployments        |
-| `ADDRIS_GEOCODER_USER_AGENT`   | User agent string for geocoding requests (required by `nominatim`)        |
-| `ADDRIS_GEOCODER_DOMAIN`       | Optional domain override for provider-hosted endpoints                    |
-| `ADDRIS_GEOCODER_TIMEOUT`      | Timeout in seconds for geocoding requests                                 |
-| `ADDRIS_ROUTE_SERVICE_URL`     | Base URL for matrix/route service (default OpenRouteService)              |
-| `ADDRIS_ROUTE_SERVICE_API_KEY` | API key when using OpenRouteService                                       |
-| `ADDRIS_OCR_BACKEND`           | OCR engine to use (`easyocr` or `tesseract`, defaults to `easyocr`)       |
+| Variable                           | Description                                                               |
+| ---------------------------------- | ------------------------------------------------------------------------- |
+| `ADDRIS_STORAGE_ROOT`              | Directory where uploaded images and intermediate artifacts will be stored |
+| `ADDRIS_GEOCODER_PROVIDER`         | Geocoding provider (`google`, `nominatim`)                                |
+| `ADDRIS_GEOCODER_USER_AGENT`       | User agent string for geocoding requests (required by `nominatim`)        |
+| `ADDRIS_GEOCODER_DOMAIN`           | Optional domain override for provider-hosted endpoints                    |
+| `ADDRIS_GEOCODER_TIMEOUT`          | Timeout in seconds for geocoding requests                                 |
+| `ADDRIS_ROUTING_DISTANCE_PROVIDER` | Distance matrix provider (`google`, `haversine`; defaults to `google`)    |
+| `ADDRIS_GOOGLE_MAPS_API_KEY`       | Google Maps platform key used for distance and traffic data               |
+| `ADDRIS_ROUTING_DISTANCE_TIMEOUT`  | Timeout in seconds for distance matrix requests                           |
+| `ADDRIS_ROUTING_USE_TRAFFIC`       | Enable traffic-aware travel times when supported (defaults to `true`)     |
+| `ADDRIS_OCR_BACKEND`               | OCR engine to use (`easyocr` or `tesseract`, defaults to `easyocr`)       |
 
 ## Project layout
 
