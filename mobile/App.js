@@ -277,16 +277,29 @@ function WorkflowScreen() {
         cumulativeDistanceMeters: leg.cumulative_distance_meters ?? null,
         etaSeconds: leg.eta_seconds ?? null,
         cumulativeEtaSeconds: leg.cumulative_eta_seconds ?? null,
+        staticEtaSeconds: leg.static_eta_seconds ?? null,
+        trafficDelaySeconds: leg.traffic_delay_seconds ?? null,
+        hasToll: Boolean(leg.has_toll),
+        tollCurrency: leg.toll_currency ?? null,
+        tollCost: leg.toll_cost ?? null,
       }));
       LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
       setRouteLegs(legs);
       setRouteSummaryVisible(legs.length > 0);
+      const containsTolls = Boolean(
+        data.contains_tolls ?? legs.some((leg) => leg.hasToll || leg.tollCost != null),
+      );
       setRouteSummary({
         totalDistanceMeters: data.total_distance_meters ?? null,
         totalEtaSeconds: data.total_eta_seconds ?? null,
+        totalStaticEtaSeconds: data.total_static_eta_seconds ?? null,
+        totalTrafficDelaySeconds: data.total_traffic_delay_seconds ?? null,
+        totalTollCost: data.total_toll_cost ?? null,
+        totalTollCurrency: data.total_toll_currency ?? null,
         originAddress: locationLabel ?? data.origin_address ?? null,
         distanceProvider: data.distance_provider ?? null,
         usesLiveTraffic: Boolean(data.uses_live_traffic),
+        containsTolls,
       });
     },
     onError: (error) => {
@@ -728,6 +741,33 @@ function WorkflowScreen() {
     return `${Math.max(1, minutes)}m`;
   }, []);
 
+  const formatDelay = useCallback((seconds) => {
+    if (seconds == null) {
+      return null;
+    }
+    if (seconds === 0) {
+      return '0m';
+    }
+    const sign = seconds > 0 ? '+' : '-';
+    const formatted = formatDuration(Math.abs(seconds));
+    return formatted ? `${sign}${formatted}` : null;
+  }, [formatDuration]);
+
+  const formatCurrency = useCallback((amount, currency) => {
+    if (amount == null) {
+      return null;
+    }
+    const absolute = Math.abs(amount);
+    let precision = 2;
+    if (absolute >= 100) {
+      precision = 0;
+    } else if (absolute >= 10) {
+      precision = 1;
+    }
+    const value = amount.toFixed(precision);
+    return currency ? `${currency} ${value}` : value;
+  }, []);
+
   const providerLabel = useMemo(() => {
     const provider = routeSummary?.distanceProvider;
     if (!provider) {
@@ -742,6 +782,31 @@ function WorkflowScreen() {
     }
     return provider.replace(/_/g, ' ');
   }, [routeSummary?.distanceProvider]);
+
+  const routeSummaryMeta = useMemo(() => {
+    if (!routeSummary) {
+      return null;
+    }
+    const parts = [];
+    if (routeSummary.totalDistanceMeters != null) {
+      parts.push(formatDistance(routeSummary.totalDistanceMeters));
+    }
+    if (
+      routeSummary.totalTrafficDelaySeconds != null
+      && routeSummary.totalTrafficDelaySeconds !== 0
+    ) {
+      const delay = formatDelay(routeSummary.totalTrafficDelaySeconds);
+      if (delay) {
+        parts.push(`Traffic ${delay}`);
+      }
+    } else if (routeSummary.usesLiveTraffic) {
+      parts.push('Live traffic');
+    }
+    if (routeSummary.containsTolls) {
+      parts.push('Tolls');
+    }
+    return parts.length ? parts.join(' • ') : null;
+  }, [routeSummary, formatDistance, formatDelay]);
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -957,16 +1022,9 @@ function WorkflowScreen() {
               >
                 <MaterialCommunityIcons name="map-marker-check-outline" size={16} color="#166534" />
                 <Text style={styles.statusPillReadyText}>Route ready</Text>
-                {routeSummary?.totalDistanceMeters != null ? (
-                  <Text style={styles.statusPillReadyMeta}>
-                    {formatDistance(routeSummary.totalDistanceMeters)}
-                    {routeSummary?.usesLiveTraffic ? ' • Live traffic' : ''}
-                  </Text>
-                ) : (
-                  routeSummary?.usesLiveTraffic && (
-                    <Text style={styles.statusPillReadyMeta}>Live traffic</Text>
-                  )
-                )}
+                {routeSummaryMeta ? (
+                  <Text style={styles.statusPillReadyMeta}>{routeSummaryMeta}</Text>
+                ) : null}
                 <Text style={styles.statusPillReadyAction}>View</Text>
               </Pressable>
             )}
@@ -1290,8 +1348,45 @@ function WorkflowScreen() {
                       </Text>
                     </View>
                   )}
+                  {routeSummary.totalStaticEtaSeconds != null && (
+                    <View style={styles.routeSummaryMetric}>
+                      <Text style={styles.routeSummaryMetricLabel}>Base ETA</Text>
+                      <Text style={styles.routeSummaryMetricValue}>
+                        {formatDuration(routeSummary.totalStaticEtaSeconds)}
+                      </Text>
+                    </View>
+                  )}
+                  {routeSummary.totalTrafficDelaySeconds != null
+                    && routeSummary.totalTrafficDelaySeconds !== 0 && (
+                      <View style={styles.routeSummaryMetric}>
+                        <Text style={styles.routeSummaryMetricLabel}>Traffic impact</Text>
+                        <Text style={styles.routeSummaryMetricValue}>
+                          {formatDelay(routeSummary.totalTrafficDelaySeconds)}
+                        </Text>
+                      </View>
+                    )}
+                  {routeSummary.totalTollCost != null ? (
+                    <View style={styles.routeSummaryMetric}>
+                      <Text style={styles.routeSummaryMetricLabel}>Tolls</Text>
+                      <Text style={styles.routeSummaryMetricValue}>
+                        {formatCurrency(
+                          routeSummary.totalTollCost,
+                          routeSummary.totalTollCurrency,
+                        )}
+                      </Text>
+                    </View>
+                  ) : (
+                    routeSummary.containsTolls && (
+                      <View style={styles.routeSummaryMetric}>
+                        <Text style={styles.routeSummaryMetricLabel}>Tolls</Text>
+                        <Text style={styles.routeSummaryMetricValue}>Present</Text>
+                      </View>
+                    )
+                  )}
                 </View>
-                {(routeSummary.distanceProvider || routeSummary.usesLiveTraffic) && (
+                {(routeSummary.distanceProvider
+                  || routeSummary.usesLiveTraffic
+                  || routeSummary.containsTolls) && (
                   <View style={styles.routeSummaryTags}>
                     {routeSummary.distanceProvider ? (
                       <View style={styles.routeSummaryTag}>
@@ -1311,54 +1406,81 @@ function WorkflowScreen() {
                         <Text style={styles.routeSummaryTagTrafficText}>Live traffic</Text>
                       </View>
                     ) : null}
+                    {routeSummary.containsTolls ? (
+                      <View style={[styles.routeSummaryTag, styles.routeSummaryTagToll]}>
+                        <MaterialCommunityIcons name="cash-multiple" size={14} color="#86198f" />
+                        <Text style={styles.routeSummaryTagTollText}>Tolls</Text>
+                      </View>
+                    ) : null}
                   </View>
                 )}
               </View>
             )}
             <ScrollView style={styles.modalScroll}>
-              {routeLegs.map((leg) => (
-                <View key={leg.order} style={styles.routeStep}>
-                  <View style={styles.routeOrder}>
-                    <Text style={styles.routeOrderText}>{leg.order + 1}</Text>
+              {routeLegs.map((leg) => {
+                const hasDelay = leg.trafficDelaySeconds != null && leg.trafficDelaySeconds !== 0;
+                const delayLabel = hasDelay ? formatDelay(leg.trafficDelaySeconds) : null;
+                const delayStyle = leg.trafficDelaySeconds != null && leg.trafficDelaySeconds < 0
+                  ? styles.routeLegMetaGain
+                  : styles.routeLegMetaDelay;
+                return (
+                  <View key={leg.order} style={styles.routeStep}>
+                    <View style={styles.routeOrder}>
+                      <Text style={styles.routeOrderText}>{leg.order + 1}</Text>
+                    </View>
+                    <View style={styles.routeContent}>
+                      <Text style={styles.routeLabel}>{leg.label}</Text>
+                      {leg.latitude != null && leg.longitude != null && (
+                        <Text style={styles.routeCoords}>
+                          {leg.latitude.toFixed(4)}, {leg.longitude.toFixed(4)}
+                        </Text>
+                      )}
+                      {(leg.distanceMeters != null || leg.etaSeconds != null) && (
+                        <View style={styles.routeLegMetaRow}>
+                          {leg.distanceMeters != null && (
+                            <Text style={styles.routeLegMeta}>
+                              Leg: {formatDistance(leg.distanceMeters)}
+                            </Text>
+                          )}
+                          {leg.etaSeconds != null && (
+                            <Text style={styles.routeLegMeta}>
+                              ETA: {formatDuration(leg.etaSeconds)}
+                            </Text>
+                          )}
+                        </View>
+                      )}
+                      {(leg.staticEtaSeconds != null || delayLabel) && (
+                        <View style={styles.routeLegMetaRow}>
+                          {leg.staticEtaSeconds != null && (
+                            <Text style={styles.routeLegMetaSub}>
+                              Base: {formatDuration(leg.staticEtaSeconds)}
+                            </Text>
+                          )}
+                          {delayLabel && (
+                            <Text style={[styles.routeLegMetaSub, delayStyle]}>
+                              Traffic: {delayLabel}
+                            </Text>
+                          )}
+                        </View>
+                      )}
+                      {(leg.cumulativeDistanceMeters != null || leg.cumulativeEtaSeconds != null) && (
+                        <View style={styles.routeLegMetaRow}>
+                          {leg.cumulativeDistanceMeters != null && (
+                            <Text style={styles.routeLegMetaSub}>
+                              Total: {formatDistance(leg.cumulativeDistanceMeters)}
+                            </Text>
+                          )}
+                          {leg.cumulativeEtaSeconds != null && (
+                            <Text style={styles.routeLegMetaSub}>
+                              {formatDuration(leg.cumulativeEtaSeconds)} overall
+                            </Text>
+                          )}
+                        </View>
+                      )}
+                    </View>
                   </View>
-                  <View style={styles.routeContent}>
-                    <Text style={styles.routeLabel}>{leg.label}</Text>
-                    {leg.latitude != null && leg.longitude != null && (
-                      <Text style={styles.routeCoords}>
-                        {leg.latitude.toFixed(4)}, {leg.longitude.toFixed(4)}
-                      </Text>
-                    )}
-                    {(leg.distanceMeters != null || leg.etaSeconds != null) && (
-                      <View style={styles.routeLegMetaRow}>
-                        {leg.distanceMeters != null && (
-                          <Text style={styles.routeLegMeta}>
-                            Leg: {formatDistance(leg.distanceMeters)}
-                          </Text>
-                        )}
-                        {leg.etaSeconds != null && (
-                          <Text style={styles.routeLegMeta}>
-                            {formatDuration(leg.etaSeconds)}
-                          </Text>
-                        )}
-                      </View>
-                    )}
-                    {(leg.cumulativeDistanceMeters != null || leg.cumulativeEtaSeconds != null) && (
-                      <View style={styles.routeLegMetaRow}>
-                        {leg.cumulativeDistanceMeters != null && (
-                          <Text style={styles.routeLegMetaSub}>
-                            Total: {formatDistance(leg.cumulativeDistanceMeters)}
-                          </Text>
-                        )}
-                        {leg.cumulativeEtaSeconds != null && (
-                          <Text style={styles.routeLegMetaSub}>
-                            {formatDuration(leg.cumulativeEtaSeconds)} overall
-                          </Text>
-                        )}
-                      </View>
-                    )}
-                  </View>
-                </View>
-              ))}
+                );
+              })}
             </ScrollView>
             <View style={styles.modalActions}>
               <Pressable
@@ -2268,5 +2390,13 @@ const styles = StyleSheet.create({
   routeLegMetaSub: {
     fontSize: 12,
     color: '#475569',
+  },
+  routeLegMetaDelay: {
+    color: '#b91c1c',
+    fontWeight: '600',
+  },
+  routeLegMetaGain: {
+    color: '#15803d',
+    fontWeight: '600',
   },
 });

@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Literal
-from uuid import UUID
 
 from pydantic import BaseModel, Field
 
@@ -17,9 +15,14 @@ class RouteLeg(BaseModel):
     latitude: float
     longitude: float
     eta_seconds: int | None = None
+    static_eta_seconds: int | None = None
+    traffic_delay_seconds: int | None = None
     distance_meters: float | None = None
     cumulative_eta_seconds: int | None = None
     cumulative_distance_meters: float | None = None
+    has_toll: bool | None = None
+    toll_currency: str | None = None
+    toll_cost: float | None = None
 
 
 class RouteOrigin(BaseModel):
@@ -37,26 +40,3 @@ class AddressCandidate(BaseModel):
     message: str | None = None
     latitude: float | None = None
     longitude: float | None = None
-
-
-class JobCreateResponse(BaseModel):
-    job_id: UUID
-    status: JobStatus
-    created_at: datetime
-
-
-class JobStatusResponse(BaseModel):
-    job_id: UUID
-    status: JobStatus
-    created_at: datetime
-    updated_at: datetime
-    addresses: list[AddressCandidate] = Field(default_factory=list)
-    route: list[RouteLeg] = Field(default_factory=list)
-    origin: RouteOrigin | None = None
-    total_distance_meters: float | None = None
-    total_eta_seconds: int | None = None
-    errors: list[str] = Field(default_factory=list)
-
-
-class JobListResponse(BaseModel):
-    jobs: list[JobStatusResponse]

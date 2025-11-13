@@ -31,6 +31,11 @@ class RouteResponse(BaseModel):
     route: list[RouteLeg] = Field(default_factory=list)
     total_distance_meters: float = 0.0
     total_eta_seconds: int | None = None
+    total_static_eta_seconds: int | None = None
+    total_traffic_delay_seconds: int | None = None
+    total_toll_cost: float | None = None
+    total_toll_currency: str | None = None
+    contains_tolls: bool = False
     origin_address: str | None = None
     distance_provider: str | None = None
     uses_live_traffic: bool = False

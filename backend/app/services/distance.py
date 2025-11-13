@@ -17,7 +17,8 @@ _ROUTE_MATRIX_ENDPOINT = (
     "https://routes.googleapis.com/distanceMatrix/v2:computeRouteMatrix"
 )
 _ROUTE_MATRIX_FIELD_MASK = (
-    "originIndex,destinationIndex,distanceMeters,duration,staticDuration,condition"
+    "originIndex,destinationIndex,distanceMeters,duration,staticDuration,"
+    "condition,travelAdvisory.tollInfo"
 )
 _AVERAGE_SPEED_MPS = 11.11
 _MAX_GOOGLE_MATRIX_NODES = 25
@@ -25,9 +26,17 @@ _DURATION_RE = re.compile(r"^(-?\d+)(?:\.(\d+))?s$")
 
 
 @dataclass(slots=True)
+class TollInfo:
+    cost: float | None
+    currency_code: str | None
+
+
+@dataclass(slots=True)
 class DistanceMatrixResult:
     distances: list[list[int]]
     durations: list[list[int]]
+    static_durations: list[list[int]]
+    tolls: list[list[TollInfo | None]]
     provider: str
     uses_live_traffic: bool
 
@@ -122,6 +131,8 @@ def _fetch_google_matrix(
 
     distances = [[0] * size for _ in range(size)]
     durations = [[0] * size for _ in range(size)]
+    static_durations = [[0] * size for _ in range(size)]
+    tolls: list[list[TollInfo | None]] = [[None] * size for _ in range(size)]
     for entry in entries:
         origin_index = entry.get("originIndex")
         destination_index = entry.get("destinationIndex")
@@ -152,9 +163,9 @@ def _fetch_google_matrix(
             _logger.warning("Google route matrix missing duration", entry=entry)
             return None
 
-        # `staticDuration` is still parsed to ensure the field mask works, even if
-        # we do not display it directly.
-        _parse_duration_seconds(entry.get("staticDuration"))
+        static_duration_value = _parse_duration_seconds(entry.get("staticDuration"))
+        if static_duration_value is None:
+            static_duration_value = duration_value
 
         try:
             distances[origin_index][destination_index] = int(
@@ -165,10 +176,16 @@ def _fetch_google_matrix(
             return None
 
         durations[origin_index][destination_index] = int(duration_value)
+        static_durations[origin_index][destination_index] = int(static_duration_value)
+        tolls[origin_index][destination_index] = _parse_toll_info(
+            entry.get("travelAdvisory")
+        )
 
     return DistanceMatrixResult(
         distances=distances,
         durations=durations,
+        static_durations=static_durations,
+        tolls=tolls,
         provider="google",
         uses_live_traffic=use_traffic,
     )
@@ -180,6 +197,8 @@ def _build_haversine_matrix(
     size = len(nodes)
     distances = [[0] * size for _ in range(size)]
     durations = [[0] * size for _ in range(size)]
+    static_durations = [[0] * size for _ in range(size)]
+    tolls: list[list[TollInfo | None]] = [[None] * size for _ in range(size)]
     for i in range(size):
         _, lat_a, lon_a = nodes[i]
         for j in range(size):
@@ -188,10 +207,14 @@ def _build_haversine_matrix(
             _, lat_b, lon_b = nodes[j]
             distance = _haversine(lat_a, lon_a, lat_b, lon_b)
             distances[i][j] = int(round(distance))
-            durations[i][j] = int(round(distance / _AVERAGE_SPEED_MPS))
+            duration = int(round(distance / _AVERAGE_SPEED_MPS))
+            durations[i][j] = duration
+            static_durations[i][j] = duration
     return DistanceMatrixResult(
         distances=distances,
         durations=durations,
+        static_durations=static_durations,
+        tolls=tolls,
         provider="haversine",
         uses_live_traffic=False,
     )
@@ -208,6 +231,43 @@ def _haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     a = sin(dlat / 2) ** 2 + cos(lat1_rad) * cos(lat2_rad) * sin(dlon / 2) ** 2
     c = 2 * atan2(sqrt(a), sqrt(1 - a))
     return radius * c
+
+
+def _parse_toll_info(value: Any) -> TollInfo | None:
+    if not isinstance(value, dict):
+        return None
+
+    toll_info = value.get("tollInfo")
+    if not isinstance(toll_info, dict):
+        return None
+
+    prices = toll_info.get("estimatedPrice")
+    best_cost: float | None = None
+    best_currency: str | None = None
+
+    if isinstance(prices, list):
+        for item in prices:
+            if not isinstance(item, dict):
+                continue
+            units = item.get("units", 0)
+            nanos = item.get("nanos", 0)
+            currency_code = item.get("currencyCode")
+            try:
+                amount = float(units) + float(nanos) / 1_000_000_000
+            except (TypeError, ValueError):
+                continue
+            if amount < 0:
+                continue
+            if best_cost is None or amount < best_cost:
+                best_cost = amount
+                best_currency = (
+                    currency_code if isinstance(currency_code, str) else None
+                )
+
+    if best_cost is None:
+        return TollInfo(cost=None, currency_code=None)
+
+    return TollInfo(cost=best_cost, currency_code=best_currency)
 
 
 def _parse_route_matrix_response(response: httpx.Response) -> list[dict[str, Any]]:

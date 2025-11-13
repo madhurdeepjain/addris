@@ -72,6 +72,8 @@ def compute_route(
     matrix = get_distance_matrix(nodes)
     distance_matrix = matrix.distances
     duration_matrix = matrix.durations
+    static_duration_matrix = matrix.static_durations
+    toll_matrix = matrix.tolls
 
     depot_index = 0
 
@@ -114,9 +116,21 @@ def compute_route(
 
         distance_meters = 0.0
         eta_seconds = 0
+        static_eta = 0
+        delay_seconds = 0
+        toll_currency = None
+        toll_cost = None
+        has_toll = False
         if prev_node is not None:
             distance_meters = float(distance_matrix[prev_node][node_index])
             eta_seconds = int(duration_matrix[prev_node][node_index])
+            static_eta = int(static_duration_matrix[prev_node][node_index])
+            delay_seconds = eta_seconds - static_eta
+            toll_info = toll_matrix[prev_node][node_index]
+            if toll_info is not None:
+                has_toll = True
+                toll_currency = toll_info.currency_code
+                toll_cost = toll_info.cost
         cumulative_distance += distance_meters
         cumulative_eta += eta_seconds
 
@@ -127,9 +141,14 @@ def compute_route(
                 latitude=lat,
                 longitude=lon,
                 eta_seconds=eta_seconds,
+                static_eta_seconds=static_eta,
+                traffic_delay_seconds=delay_seconds,
                 distance_meters=distance_meters,
                 cumulative_eta_seconds=cumulative_eta,
                 cumulative_distance_meters=cumulative_distance,
+                has_toll=has_toll,
+                toll_currency=toll_currency,
+                toll_cost=toll_cost,
             )
         )
 
@@ -156,9 +175,21 @@ def _fallback_route(
     for index, (label, lat, lon) in enumerate(nodes):
         distance_meters = 0.0
         eta_seconds = 0
+        static_eta = 0
+        delay_seconds = 0
+        has_toll = False
+        toll_currency = None
+        toll_cost = None
         if index > 0:
             distance_meters = float(matrix.distances[index - 1][index])
             eta_seconds = int(matrix.durations[index - 1][index])
+            static_eta = int(matrix.static_durations[index - 1][index])
+            delay_seconds = eta_seconds - static_eta
+            toll_info = matrix.tolls[index - 1][index]
+            if toll_info is not None:
+                has_toll = True
+                toll_currency = toll_info.currency_code
+                toll_cost = toll_info.cost
         cumulative_distance += distance_meters
         cumulative_eta += eta_seconds
         legs.append(
@@ -168,9 +199,14 @@ def _fallback_route(
                 latitude=lat,
                 longitude=lon,
                 eta_seconds=eta_seconds,
+                static_eta_seconds=static_eta,
+                traffic_delay_seconds=delay_seconds,
                 distance_meters=distance_meters,
                 cumulative_eta_seconds=cumulative_eta,
                 cumulative_distance_meters=cumulative_distance,
+                has_toll=has_toll,
+                toll_currency=toll_currency,
+                toll_cost=toll_cost,
             )
         )
     return legs
