@@ -5,6 +5,7 @@ from tempfile import SpooledTemporaryFile
 import pytest
 from fastapi import UploadFile
 
+from app.parsing.validation import AddressValidationResult
 from app.services.address_service import AddressExtractionService
 from app.services.geocoding import GeocodeResult
 from app.services.storage import StorageService
@@ -21,6 +22,10 @@ def _stub_parser(_text):
         "city": "Mountain View",
         "state": "CA",
     }
+
+
+def _stub_validator(parsed, _raw_text):
+    return AddressValidationResult(True, components=dict(parsed))
 
 
 async def _stub_geocoder(parsed, _raw_text):
@@ -41,6 +46,7 @@ async def test_address_extraction_service_returns_candidates(tmp_path):
         ocr_runner=_stub_ocr,
         address_parser=_stub_parser,
         geocoder=_stub_geocoder,
+        address_validator=_stub_validator,
     )
 
     file_obj = SpooledTemporaryFile()

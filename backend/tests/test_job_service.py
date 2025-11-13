@@ -5,6 +5,7 @@ from tempfile import SpooledTemporaryFile
 import pytest
 from fastapi import UploadFile
 
+from app.parsing.validation import AddressValidationResult
 from app.schemas.jobs import RouteLeg
 from app.services.geocoding import GeocodeResult
 from app.services.job_service import JobService
@@ -36,6 +37,10 @@ async def _stub_geocoder(parsed, _raw_text):
     )
 
 
+def _stub_validator(parsed, _raw_text):
+    return AddressValidationResult(True, components=dict(parsed))
+
+
 def _stub_router(addresses):
     items = list(addresses)
     legs = []
@@ -64,6 +69,7 @@ async def test_job_service_processes_job(tmp_path):
         ocr_runner=_stub_ocr,
         address_parser=_stub_parser,
         geocoder=_stub_geocoder,
+        address_validator=_stub_validator,
         router=_stub_router,
     )
 

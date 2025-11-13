@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 from app.core.logging import get_logger
+from app.parsing.validation import AddressValidationResult
 from app.schemas.jobs import AddressCandidate
 from app.services.geocoding import GeocodeResult
 
@@ -21,6 +22,8 @@ async def extract_address_candidates(
     address_parser,
     geocoder,
     *,
+    address_validator: Callable[[dict[str, str], str], AddressValidationResult]
+    | None = None,
     log_context: dict[str, Any] | None = None,
 ) -> list[AddressCandidate]:
     """Run OCR, parse, and geocode to build address candidates."""
@@ -57,6 +60,30 @@ async def extract_address_candidates(
         else:
             parse_error_message = None
 
+        validation_error_message = None
+        if parsed and address_validator:
+            try:
+                validation_result = await asyncio.to_thread(
+                    address_validator, parsed, text
+                )
+            except Exception as validation_error:  # pragma: no cover - defensive
+                _logger.warning(
+                    "Address validation failed",
+                    text=text,
+                    error=str(validation_error),
+                    **context,
+                )
+                parsed = None
+                validation_error_message = str(validation_error)
+            else:
+                if not validation_result.is_valid:
+                    validation_error_message = (
+                        validation_result.reason or "Address rejected by validator"
+                    )
+                    parsed = None
+                else:
+                    parsed = validation_result.components or dict(parsed)
+
         log_payload: dict[str, Any] = {
             "text": text,
             "confidence": confidence,
@@ -65,13 +92,15 @@ async def extract_address_candidates(
         }
         if parse_error_message:
             log_payload["parse_error"] = parse_error_message
+        if validation_error_message:
+            log_payload["validation_error"] = validation_error_message
         _logger.info("Address parsed", **log_payload)
 
         geocode_result = await _geocode_candidate(
             parsed,
             text,
             geocoder,
-            parse_error_message=parse_error_message,
+            skip_reason=parse_error_message or validation_error_message,
         )
 
         _logger.info(
@@ -107,7 +136,7 @@ async def _geocode_candidate(
     raw_text: str,
     geocoder,
     *,
-    parse_error_message: str | None = None,
+    skip_reason: str | None = None,
 ) -> GeocodeResult:
     if parsed:
         return await geocoder(parsed, raw_text)
@@ -116,7 +145,7 @@ async def _geocode_candidate(
         None,
         None,
         0.0,
-        message=parse_error_message or "Unrecognized address",
+        message=skip_reason or "Unrecognized address",
     )
 
 

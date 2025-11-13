@@ -19,13 +19,6 @@ class Settings(BaseSettings):
     )
     geocoder_email: str | None = Field(None, alias="ADDRIS_GEOCODER_EMAIL")
 
-    route_service_url: str = Field(
-        "https://api.openrouteservice.org", alias="ADDRIS_ROUTE_SERVICE_URL"
-    )
-    route_service_api_key: str | None = Field(
-        None, alias="ADDRIS_ROUTE_SERVICE_API_KEY"
-    )
-
     ocr_backend: Literal["easyocr", "tesseract"] = Field(
         "easyocr", alias="ADDRIS_OCR_BACKEND"
     )

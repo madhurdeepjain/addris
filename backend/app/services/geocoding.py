@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+import re
 from typing import Mapping
 
 import httpx
@@ -35,32 +36,47 @@ async def geocode_address(
     if not parsed:
         return GeocodeResult(None, None, 0.0, message="No address components available")
 
-    query = _compose_query(parsed, raw_text)
-    _logger.info("Geocoding lookup", query=query)
+    queries = _compose_queries(parsed, raw_text)
+    last_result: GeocodeResult | None = None
 
-    async with _cache_lock:
-        cached = _cache.get(query)
-    if cached:
-        _logger.info("Geocoding cache hit", query=query)
-        return cached
+    for query in queries:
+        if not query:
+            continue
 
-    try:
-        result = await _fetch(query)
-    except Exception as exc:  # pragma: no cover - unexpected transport errors
-        _logger.warning("Geocoding failed", query=query, error=str(exc))
-        return GeocodeResult(None, None, 0.0, message=str(exc))
+        _logger.info("Geocoding lookup", query=query)
 
-    async with _cache_lock:
-        _cache[query] = result
-    _logger.info(
-        "Geocoding success",
-        query=query,
-        latitude=result.latitude,
-        longitude=result.longitude,
-        confidence=result.confidence,
-        message=result.message,
+        async with _cache_lock:
+            cached = _cache.get(query)
+        if cached:
+            _logger.info("Geocoding cache hit", query=query)
+            return cached
+
+        try:
+            result = await _fetch(query)
+        except Exception as exc:  # pragma: no cover - unexpected transport errors
+            _logger.warning("Geocoding failed", query=query, error=str(exc))
+            last_result = GeocodeResult(None, None, 0.0, message=str(exc))
+            continue
+
+        async with _cache_lock:
+            _cache[query] = result
+        _logger.info(
+            "Geocoding success",
+            query=query,
+            latitude=result.latitude,
+            longitude=result.longitude,
+            confidence=result.confidence,
+            message=result.message,
+        )
+
+        if result.latitude is not None and result.longitude is not None:
+            return result
+
+        last_result = result
+
+    return last_result or GeocodeResult(
+        None, None, 0.0, message="No geocoding candidates"
     )
-    return result
 
 
 async def _fetch(query: str) -> GeocodeResult:
@@ -116,7 +132,7 @@ async def _get_client() -> httpx.AsyncClient:
         return _client
 
 
-def _compose_query(parsed: Mapping[str, str], raw_text: str) -> str:
+def _compose_queries(parsed: Mapping[str, str], raw_text: str) -> list[str]:
     priorities = [
         "house_number",
         "road",
@@ -129,8 +145,55 @@ def _compose_query(parsed: Mapping[str, str], raw_text: str) -> str:
         "country",
     ]
 
-    parts = [parsed[key] for key in priorities if key in parsed and parsed[key].strip()]
-    if not parts:
-        parts = [value for value in parsed.values() if value.strip()]
-    query = ", ".join(dict.fromkeys(part.strip() for part in parts if part.strip()))
-    return query or raw_text.strip()
+    normalized = {
+        key: value.strip()
+        for key, value in parsed.items()
+        if isinstance(value, str) and value.strip()
+    }
+
+    queries: list[str] = []
+
+    def build_query(components: Mapping[str, str]) -> str:
+        parts = [
+            components[key]
+            for key in priorities
+            if key in components and components[key].strip()
+        ]
+        if not parts:
+            parts = [value for value in components.values() if value.strip()]
+        deduped = dict.fromkeys(part.strip() for part in parts if part.strip())
+        return ", ".join(deduped)
+
+    primary = build_query(normalized)
+    if primary:
+        queries.append(primary)
+
+    postcode = normalized.get("postcode")
+    if postcode:
+        base_zip = _base_zip(postcode)
+        if base_zip and base_zip != postcode:
+            zip_components = dict(normalized)
+            zip_components["postcode"] = base_zip
+            alt = build_query(zip_components)
+            if alt:
+                queries.append(alt)
+
+        zipless_components = dict(normalized)
+        zipless_components.pop("postcode", None)
+        alt = build_query(zipless_components)
+        if alt:
+            queries.append(alt)
+
+    if raw_text.strip():
+        queries.append(raw_text.strip())
+
+    # Preserve order while removing duplicates
+    deduped_queries = list(dict.fromkeys(query for query in queries if query))
+    return deduped_queries or [raw_text.strip()]
+
+
+def _base_zip(postcode: str) -> str | None:
+    match = re.fullmatch(r"(\d{5})(?:[-\s]?(\d{4}))?", postcode.strip())
+    if not match:
+        return None
+    return match.group(1)

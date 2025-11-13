@@ -8,6 +8,7 @@ from fastapi import UploadFile
 from app.core.logging import get_logger
 from app.ocr.pipeline import run_ocr
 from app.parsing.address_parser import parse_address
+from app.parsing.validation import AddressValidationResult, validate_parsed_address
 from app.schemas.jobs import AddressCandidate
 from app.services.geocoding import GeocodeResult, geocode_address
 from app.services.pipeline import extract_address_candidates
@@ -17,6 +18,7 @@ from app.services.storage import StorageService
 OCRCallable = Callable[[Path], Sequence[tuple[str, float]]]
 AddressParserCallable = Callable[[str], dict[str, str] | None]
 GeocoderCallable = Callable[[dict[str, str], str], Awaitable[GeocodeResult]]
+AddressValidatorCallable = Callable[[dict[str, str], str], AddressValidationResult]
 
 
 _logger = get_logger(__name__)
@@ -32,11 +34,13 @@ class AddressExtractionService:
         ocr_runner: OCRCallable = run_ocr,
         address_parser: AddressParserCallable = parse_address,
         geocoder: GeocoderCallable = geocode_address,
+        address_validator: AddressValidatorCallable = validate_parsed_address,
     ) -> None:
         self._storage = storage
         self._ocr_runner = ocr_runner
         self._address_parser = address_parser
         self._geocoder = geocoder
+        self._address_validator = address_validator
 
     async def extract(self, upload: UploadFile) -> list[AddressCandidate]:
         contents = await upload.read()
@@ -49,6 +53,7 @@ class AddressExtractionService:
                 self._ocr_runner,
                 self._address_parser,
                 self._geocoder,
+                address_validator=self._address_validator,
             )
             return addresses
         finally:

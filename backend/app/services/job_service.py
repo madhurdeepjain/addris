@@ -11,6 +11,7 @@ from fastapi import UploadFile
 from app.core.logging import get_logger
 from app.ocr.pipeline import run_ocr
 from app.parsing.address_parser import parse_address
+from app.parsing.validation import AddressValidationResult, validate_parsed_address
 from app.routing.optimizer import compute_route
 from app.schemas.jobs import JobStatusResponse, RouteLeg
 from app.services.geocoding import GeocodeResult, geocode_address
@@ -23,6 +24,7 @@ from app.services.storage import StorageService
 OCRCallable = Callable[[Path], Sequence[tuple[str, float]]]
 AddressParserCallable = Callable[[str], dict[str, str] | None]
 GeocoderCallable = Callable[[dict[str, str], str], Awaitable[GeocodeResult]]
+AddressValidatorCallable = Callable[[dict[str, str], str], AddressValidationResult]
 RouteCallable = Callable[
     [Iterable[tuple[str, float | None, float | None]]], Sequence[RouteLeg]
 ]
@@ -43,6 +45,7 @@ class JobService:
         ocr_runner: OCRCallable = run_ocr,
         address_parser: AddressParserCallable = parse_address,
         geocoder: GeocoderCallable = geocode_address,
+        address_validator: AddressValidatorCallable = validate_parsed_address,
         router: RouteCallable = compute_route,
     ) -> None:
         self._storage = storage
@@ -55,6 +58,7 @@ class JobService:
         self._ocr_runner = ocr_runner
         self._address_parser = address_parser
         self._geocoder = geocoder
+        self._address_validator = address_validator
         self._router = router
 
     async def create_job(
@@ -133,6 +137,7 @@ class JobService:
                 self._ocr_runner,
                 self._address_parser,
                 self._geocoder,
+                address_validator=self._address_validator,
                 log_context={"job_id": str(job_id)},
             )
 
