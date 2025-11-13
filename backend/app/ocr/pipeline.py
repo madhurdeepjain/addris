@@ -2,12 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Sequence, TYPE_CHECKING
+from typing import Any, Sequence
 
 import cv2
 import numpy as np
-import pytesseract
-from pytesseract import Output
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
@@ -16,11 +14,9 @@ from app.core.logging import get_logger
 _TESSERACT_CONFIG = "--oem 3 --psm 6"
 _MAX_RESULTS = 10
 _EASYOCR_LANGUAGES = ("en",)
+_DEFAULT_EASYOCR_CONFIDENCE = 0.5
 _logger = get_logger(__name__)
 _easyocr_reader: Any = None
-
-if TYPE_CHECKING:
-    from easyocr import Reader
 
 
 @dataclass(slots=True)
@@ -53,6 +49,14 @@ def run_ocr(image_path: Path) -> Sequence[tuple[str, float]]:
 
 
 def _run_with_tesseract(image_path: Path) -> Sequence[tuple[str, float]]:
+    try:
+        import pytesseract
+        from pytesseract import Output
+    except ImportError as exc:  # pragma: no cover
+        raise RuntimeError(
+            "Tesseract backend selected but the 'pytesseract' package is not installed."
+        ) from exc
+
     image = cv2.imread(str(image_path))
     if image is None:
         _logger.error("Image read failed", image_path=str(image_path))
@@ -76,7 +80,7 @@ def _run_with_tesseract(image_path: Path) -> Sequence[tuple[str, float]]:
     return results
 
 
-def _get_easyocr_reader() -> "Reader":
+def _get_easyocr_reader():
     global _easyocr_reader
     if _easyocr_reader is not None:
         return _easyocr_reader  # type: ignore[return-value]
@@ -89,7 +93,7 @@ def _get_easyocr_reader() -> "Reader":
         ) from exc
 
     try:
-        reader: "Reader" = easyocr.Reader(list(_EASYOCR_LANGUAGES), gpu=False)
+        reader = easyocr.Reader(list(_EASYOCR_LANGUAGES), gpu=False)
     except Exception as exc:  # pragma: no cover - depends on system setup
         _logger.error("EasyOCR initialization failed", error=str(exc))
         raise RuntimeError(f"Unable to initialize EasyOCR: {exc}") from exc
@@ -112,16 +116,33 @@ def _run_with_easyocr(image_path: Path) -> Sequence[tuple[str, float]]:
 
     lines: list[OCRLine] = []
     for candidate in results:
-        if not isinstance(candidate, (list, tuple)) or len(candidate) < 3:
+        text: str | None = None
+        confidence_value: Any = None
+
+        if isinstance(candidate, str):
+            text = candidate
+        elif isinstance(candidate, (list, tuple)):
+            if len(candidate) >= 2:
+                text = candidate[1]
+            elif candidate:
+                text = candidate[0]
+            if len(candidate) >= 3:
+                confidence_value = candidate[2]
+        else:
             continue
-        _, text, confidence = candidate[:3]
-        normalized_text = str(text).strip()
+
+        normalized_text = str(text).strip() if text is not None else ""
         if not normalized_text:
             continue
+
         try:
-            conf_value = float(confidence)
+            if confidence_value is None:
+                conf_value = _DEFAULT_EASYOCR_CONFIDENCE
+            else:
+                conf_value = float(confidence_value)
         except (TypeError, ValueError):
-            continue
+            conf_value = _DEFAULT_EASYOCR_CONFIDENCE
+
         clamped_conf = max(0.0, min(1.0, conf_value))
         lines.append(OCRLine(normalized_text, clamped_conf))
 
@@ -144,6 +165,8 @@ def _preprocess(image: np.ndarray) -> np.ndarray:
 
 def _correct_orientation(image: np.ndarray) -> np.ndarray:
     try:
+        import pytesseract
+
         osd = pytesseract.image_to_osd(image)
     except pytesseract.TesseractError:
         _logger.debug("Orientation detection skipped")

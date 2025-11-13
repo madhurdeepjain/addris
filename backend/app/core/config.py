@@ -30,8 +30,6 @@ class Settings(BaseSettings):
         "easyocr", alias="ADDRIS_OCR_BACKEND"
     )
 
-    environment: Literal["dev", "prod", "test"] = Field("dev", alias="ADDRIS_ENV")
-
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
