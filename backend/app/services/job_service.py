@@ -12,9 +12,10 @@ from app.core.logging import get_logger
 from app.ocr.pipeline import run_ocr
 from app.parsing.address_parser import parse_address
 from app.routing.optimizer import compute_route
-from app.schemas.jobs import AddressCandidate, JobStatusResponse, RouteLeg
+from app.schemas.jobs import JobStatusResponse, RouteLeg
 from app.services.geocoding import GeocodeResult, geocode_address
 from app.services.models import JobRecord
+from app.services.pipeline import extract_address_candidates
 from app.services.repository import JobRepository
 from app.services.storage import StorageService
 
@@ -127,95 +128,13 @@ class JobService:
         _logger.info("Job processing started", job_id=str(job_id))
 
         try:
-            ocr_results = await asyncio.to_thread(self._ocr_runner, record.image_path)
-            _logger.info(
-                "OCR results received",
-                job_id=str(job_id),
-                candidates=len(ocr_results),
-                preview=[text for text, _ in ocr_results[:3]],
+            addresses = await extract_address_candidates(
+                record.image_path,
+                self._ocr_runner,
+                self._address_parser,
+                self._geocoder,
+                log_context={"job_id": str(job_id)},
             )
-            addresses: list[AddressCandidate] = []
-
-            for text, confidence in ocr_results:
-                try:
-                    parsed = await asyncio.to_thread(self._address_parser, text)
-                except Exception as parse_error:  # pragma: no cover - defensive
-                    _logger.warning(
-                        "Address parsing failed",
-                        job_id=str(job_id),
-                        error=str(parse_error),
-                    )
-                    parsed = None
-                    parse_error_message = str(parse_error)
-                else:
-                    parse_error_message = None
-
-                log_payload = {
-                    "job_id": str(job_id),
-                    "text": text,
-                    "confidence": confidence,
-                    "parsed": parsed,
-                }
-                if parse_error_message:
-                    log_payload["parse_error"] = parse_error_message
-                _logger.info("Address parsed", **log_payload)
-
-                geocode_result = (
-                    await self._geocoder(parsed, text)
-                    if parsed
-                    else GeocodeResult(
-                        None,
-                        None,
-                        0.0,
-                        message=parse_error_message or "Unrecognized address",
-                    )
-                )
-
-                _logger.info(
-                    "Geocoding completed",
-                    job_id=str(job_id),
-                    text=text,
-                    latitude=geocode_result.latitude,
-                    longitude=geocode_result.longitude,
-                    confidence=geocode_result.confidence,
-                    message=geocode_result.message,
-                    resolved_label=geocode_result.resolved_label,
-                )
-
-                base_confidence = max(0.0, min(1.0, confidence))
-                combined_confidence = base_confidence
-                if geocode_result.confidence > 0:
-                    combined_confidence = min(
-                        1.0, (base_confidence + geocode_result.confidence) / 2
-                    )
-                elif geocode_result.message:
-                    combined_confidence = max(0.0, base_confidence * 0.5)
-
-                status = "pending"
-                if (
-                    geocode_result.latitude is not None
-                    and geocode_result.longitude is not None
-                ):
-                    status = "validated"
-                elif geocode_result.message:
-                    status = "failed"
-
-                parsed_payload = dict(parsed) if parsed else None
-                if parsed_payload and geocode_result.resolved_label:
-                    parsed_payload.setdefault(
-                        "resolved_label", geocode_result.resolved_label
-                    )
-
-                candidate = AddressCandidate(
-                    raw_text=text,
-                    confidence=combined_confidence,
-                    parsed=parsed_payload,
-                    status=status,
-                    message=geocode_result.message if status == "failed" else None,
-                    latitude=geocode_result.latitude,
-                    longitude=geocode_result.longitude,
-                )
-                addresses.append(candidate)
 
             route_inputs: list[tuple[str, float | None, float | None]] = []
             if record.origin:
