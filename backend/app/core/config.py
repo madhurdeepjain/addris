@@ -14,8 +14,8 @@ class Settings(BaseSettings):
     debug: bool = Field(False, alias="ADDRIS_DEBUG")
     storage_root: Path = Field(Path("./data"), alias="ADDRIS_STORAGE_ROOT")
 
-    geocoder_provider: Literal["google", "nominatim", "bing", "azure", "mapbox"] = (
-        Field("google", alias="ADDRIS_GEOCODER_PROVIDER")
+    geocoder_provider: Literal["google", "nominatim"] = Field(
+        "nominatim", alias="ADDRIS_GEOCODER_PROVIDER"
     )
     geocoder_api_key: str | None = Field(None, alias="ADDRIS_GEOCODER_API_KEY")
     geocoder_user_agent: str = Field(

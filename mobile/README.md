@@ -5,10 +5,9 @@ Expo-based React Native application that lets drivers capture delivery documents
 ## Features
 
 - Capture or import delivery images and upload them to the FastAPI backend
-- Track job progress with confidence scores, validation messages, and optimized route legs
 - Launch the optimized route in Google Maps for navigation
-- Review recent jobs and reopen them from the history list
 - Pull-to-refresh to ensure mobile state matches the backend
+- Reverse geocodes the driver’s current location to show a nearby address
 
 ## Prerequisites
 

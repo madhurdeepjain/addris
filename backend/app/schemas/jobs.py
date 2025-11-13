@@ -18,6 +18,15 @@ class RouteLeg(BaseModel):
     longitude: float
     eta_seconds: int | None = None
     distance_meters: float | None = None
+    cumulative_eta_seconds: int | None = None
+    cumulative_distance_meters: float | None = None
+
+
+class RouteOrigin(BaseModel):
+    latitude: float
+    longitude: float
+    label: str | None = None
+    address: str | None = None
 
 
 class AddressCandidate(BaseModel):
@@ -43,6 +52,9 @@ class JobStatusResponse(BaseModel):
     updated_at: datetime
     addresses: list[AddressCandidate] = Field(default_factory=list)
     route: list[RouteLeg] = Field(default_factory=list)
+    origin: RouteOrigin | None = None
+    total_distance_meters: float | None = None
+    total_eta_seconds: int | None = None
     errors: list[str] = Field(default_factory=list)
 
 

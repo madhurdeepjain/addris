@@ -10,13 +10,14 @@
   },
   "dependencies": {
     "@tanstack/react-query": "^5.90.5",
-    "expo": "~54.0.20",
+    "expo": "~54.0.23",
     "expo-file-system": "~19.0.17",
     "expo-image-picker": "~17.0.8",
     "expo-location": "~19.0.7",
     "expo-status-bar": "~3.0.8",
     "react": "19.1.0",
-    "react-native": "0.81.5"
+    "react-native": "0.81.5",
+    "react-native-map-link": "^3.10.0"
   },
   "private": true
 }

@@ -27,8 +27,11 @@ _logger = get_logger(__name__)
 _cache = TTLCache(maxsize=512, ttl=60 * 60 * 24)
 _cache_lock = asyncio.Lock()
 _geocoder_lock = asyncio.Lock()
-_geocode_call_lock = asyncio.Lock()
+_geocoder_call_lock = asyncio.Lock()
 _geocoder: Geocoder | None = None
+
+_FORWARD_CACHE_PREFIX = "forward:"
+_REVERSE_CACHE_PREFIX = "reverse:"
 
 
 class GeocodeConfigurationError(RuntimeError):
@@ -60,11 +63,12 @@ async def geocode_address(
         if not query:
             continue
 
+        cache_key = f"{_FORWARD_CACHE_PREFIX}{query}"
         _logger.info("Geocoding lookup", query=query)
 
         async with _cache_lock:
-            cached = _cache.get(query)
-        if cached:
+            cached = _cache.get(cache_key)
+        if isinstance(cached, GeocodeResult):
             _logger.info("Geocoding cache hit", query=query)
             return cached
 
@@ -76,7 +80,7 @@ async def geocode_address(
             continue
 
         async with _cache_lock:
-            _cache[query] = result
+            _cache[cache_key] = result
         _logger.info(
             "Geocoding success",
             query=query,
@@ -151,8 +155,65 @@ async def _geocode(query: str) -> "Location | None":
     if settings.geocoder_provider == "nominatim":
         kwargs["addressdetails"] = True
 
-    async with _geocode_call_lock:
+    async with _geocoder_call_lock:
         return await asyncio.to_thread(geocoder.geocode, query, **kwargs)
+
+
+async def reverse_geocode(latitude: float, longitude: float) -> str | None:
+    cache_key = f"{_REVERSE_CACHE_PREFIX}{latitude:.6f},{longitude:.6f}"
+    async with _cache_lock:
+        cached = _cache.get(cache_key)
+    if isinstance(cached, str):
+        return cached or None
+
+    try:
+        location = await _reverse_lookup(latitude, longitude)
+    except GeocodeConfigurationError as exc:
+        _logger.error("Reverse geocoding misconfiguration", error=str(exc))
+        return None
+    except (GeocoderQuotaExceeded, GeocoderTimedOut) as exc:
+        _logger.warning("Reverse geocoding throttled", error=str(exc))
+        return None
+    except (GeocoderServiceError, GeocoderUnavailable, GeopyError) as exc:
+        _logger.warning("Reverse geocoding failed", error=str(exc))
+        return None
+
+    resolved = _resolve_reverse_label(location) if location else None
+
+    async with _cache_lock:
+        _cache[cache_key] = resolved or ""
+    return resolved
+
+
+async def _reverse_lookup(latitude: float, longitude: float) -> "Location | None":
+    geocoder = await _get_geocoder()
+    settings = get_settings()
+    kwargs: dict[str, object] = {"exactly_one": True}
+    if settings.geocoder_provider == "nominatim":
+        kwargs["addressdetails"] = True
+
+    async with _geocoder_call_lock:
+        return await asyncio.to_thread(
+            geocoder.reverse, (latitude, longitude), **kwargs
+        )
+
+
+def _resolve_reverse_label(location: "Location") -> str | None:
+    resolved = getattr(location, "address", None)
+    raw_obj = getattr(location, "raw", {}) or {}
+    raw = cast(Mapping[str, object], raw_obj) if isinstance(raw_obj, Mapping) else {}
+
+    if not resolved:
+        formatted = raw.get("formatted_address")
+        if isinstance(formatted, str):
+            resolved = formatted
+
+    if not resolved:
+        display_name = raw.get("display_name")
+        if isinstance(display_name, str):
+            resolved = display_name
+
+    return resolved
 
 
 async def _get_geocoder() -> Geocoder:
@@ -186,25 +247,6 @@ def _create_geocoder(settings: "Settings") -> Geocoder:
             kwargs["api_key"] = settings.geocoder_api_key
         return geocoder_cls(**kwargs)
 
-    if provider == "bing":
-        api_key = _require_api_key(provider, settings.geocoder_api_key)
-        geocoder_cls = get_geocoder_for_service("bing")
-        return geocoder_cls(api_key=api_key, timeout=timeout, user_agent=user_agent)
-
-    if provider == "azure":
-        api_key = _require_api_key(provider, settings.geocoder_api_key)
-        geocoder_cls = get_geocoder_for_service("azuremaps")
-        return geocoder_cls(
-            subscription_key=api_key, timeout=timeout, user_agent=user_agent
-        )
-
-    if provider == "mapbox":
-        api_key = _require_api_key(provider, settings.geocoder_api_key)
-        geocoder_cls = get_geocoder_for_service("mapbox")
-        return geocoder_cls(
-            access_token=api_key, timeout=timeout, user_agent=user_agent
-        )
-
     raise GeocodeConfigurationError(f"Unsupported geocoder provider '{provider}'")
 
 
@@ -237,23 +279,6 @@ def _extract_confidence(provider: str, raw: Mapping[str, object]) -> float:
                     if location_type in mapping:
                         return mapping[location_type]
 
-        if provider == "bing":
-            confidence = raw.get("confidence")
-            if isinstance(confidence, str):
-                mapping = {"high": 0.9, "medium": 0.6, "low": 0.3}
-                lowered = confidence.lower()
-                if lowered in mapping:
-                    return mapping[lowered]
-
-        if provider == "azure":
-            score = raw.get("score")
-            if isinstance(score, (int, float)):
-                return _clamp_confidence(float(score))
-
-        if provider == "mapbox":
-            relevance = raw.get("relevance")
-            if isinstance(relevance, (int, float)):
-                return _clamp_confidence(float(relevance))
     except (TypeError, ValueError):  # pragma: no cover - defensive
         return 0.5
 

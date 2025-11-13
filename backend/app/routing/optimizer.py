@@ -45,6 +45,8 @@ def compute_route(
                 longitude=lon,
                 eta_seconds=0,
                 distance_meters=0.0,
+                cumulative_eta_seconds=0,
+                cumulative_distance_meters=0.0,
             )
         ]
 
@@ -81,6 +83,8 @@ def compute_route(
     route: list[RouteLeg] = []
     prev_node = None
     average_speed_mps = 11.11  # ~40 km/h
+    cumulative_distance = 0.0
+    cumulative_eta = 0
 
     while not routing.IsEnd(index):
         node_index = manager.IndexToNode(index)
@@ -89,7 +93,10 @@ def compute_route(
         distance_meters = 0.0
         if prev_node is not None:
             distance_meters = distance_matrix[prev_node][node_index]
-        eta_seconds = int(distance_meters / average_speed_mps) if distance_meters else 0
+        distance_value = float(distance_meters)
+        cumulative_distance += distance_value
+        eta_seconds = int(distance_value / average_speed_mps) if distance_value else 0
+        cumulative_eta += eta_seconds
 
         route.append(
             RouteLeg(
@@ -98,7 +105,9 @@ def compute_route(
                 latitude=lat,
                 longitude=lon,
                 eta_seconds=eta_seconds,
-                distance_meters=float(distance_meters),
+                distance_meters=distance_value,
+                cumulative_eta_seconds=cumulative_eta,
+                cumulative_distance_meters=cumulative_distance,
             )
         )
 
@@ -140,11 +149,15 @@ def _fallback_route(nodes: list[tuple[str, float, float]]) -> list[RouteLeg]:
     legs: list[RouteLeg] = []
     prev: tuple[str, float, float] | None = None
     average_speed_mps = 11.11
+    cumulative_distance = 0.0
+    cumulative_eta = 0
     for order, (label, lat, lon) in enumerate(nodes):
         distance_meters = 0.0
         if prev is not None:
             distance_meters = _haversine(prev[1], prev[2], lat, lon)
+        cumulative_distance += distance_meters
         eta_seconds = int(distance_meters / average_speed_mps) if distance_meters else 0
+        cumulative_eta += eta_seconds
         legs.append(
             RouteLeg(
                 order=order,
@@ -153,6 +166,8 @@ def _fallback_route(nodes: list[tuple[str, float, float]]) -> list[RouteLeg]:
                 longitude=lon,
                 eta_seconds=eta_seconds,
                 distance_meters=distance_meters,
+                cumulative_eta_seconds=cumulative_eta,
+                cumulative_distance_meters=cumulative_distance,
             )
         )
         prev = (label, lat, lon)

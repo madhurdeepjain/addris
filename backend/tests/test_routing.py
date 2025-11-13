@@ -14,3 +14,4 @@ def test_compute_route_orders_origin_first():
     assert route[0].label == "Origin"
     labels = {leg.label for leg in route}
     assert labels == {"Origin", "Stop A", "Stop B"}
+    assert route[0].cumulative_distance_meters == 0.0

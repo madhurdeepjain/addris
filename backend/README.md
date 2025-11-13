@@ -30,8 +30,8 @@ Create a `.env` file (see `.env.example`) to configure services.
 | Variable                       | Description                                                               |
 | ------------------------------ | ------------------------------------------------------------------------- |
 | `ADDRIS_STORAGE_ROOT`          | Directory where uploaded images and intermediate artifacts will be stored |
-| `ADDRIS_GEOCODER_PROVIDER`     | Geocoding provider (`google`, `nominatim`, `bing`, `azure`, `mapbox`)     |
-| `ADDRIS_GEOCODER_API_KEY`      | API key/token for the selected provider (not required for `nominatim`)    |
+| `ADDRIS_GEOCODER_PROVIDER`     | Geocoding provider (`google`, `nominatim`)                                |
+| `ADDRIS_GEOCODER_API_KEY`      | API key for Google; optional for self-hosted Nominatim deployments        |
 | `ADDRIS_GEOCODER_USER_AGENT`   | User agent string for geocoding requests (required by `nominatim`)        |
 | `ADDRIS_GEOCODER_DOMAIN`       | Optional domain override for provider-hosted endpoints                    |
 | `ADDRIS_GEOCODER_TIMEOUT`      | Timeout in seconds for geocoding requests                                 |
@@ -63,4 +63,4 @@ uv sync --extra dev  # first time only
 uv run pytest
 ```
 
-The suite exercises the address parser, routing optimizer, repository persistence, and a stubbed end-to-end job workflow.
+The suite exercises the address parser, routing optimizer, and a stubbed end-to-end job workflow.

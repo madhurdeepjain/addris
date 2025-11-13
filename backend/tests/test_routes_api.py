@@ -20,6 +20,8 @@ def _stub_route(addresses):
                 longitude=lon,
                 eta_seconds=0,
                 distance_meters=0.0,
+                cumulative_eta_seconds=0,
+                cumulative_distance_meters=0.0,
             )
         )
     return legs
@@ -27,6 +29,11 @@ def _stub_route(addresses):
 
 def test_route_endpoint_returns_route(monkeypatch):
     monkeypatch.setattr("app.api.v1.routes.compute_route", _stub_route)
+
+    async def _stub_reverse_geocode(_lat, _lon):
+        return "1600 Amphitheatre Pkwy, Mountain View, CA 94043"
+
+    monkeypatch.setattr("app.api.v1.routes.reverse_geocode", _stub_reverse_geocode)
 
     payload = {
         "origin": {
@@ -47,3 +54,6 @@ def test_route_endpoint_returns_route(monkeypatch):
     assert len(data["route"]) == 3
     assert data["route"][0]["label"] == "Current Location"
     assert data["route"][1]["label"] == "Stop A"
+    assert data["origin_address"] == "1600 Amphitheatre Pkwy, Mountain View, CA 94043"
+    assert data["total_distance_meters"] == 0.0
+    assert data["total_eta_seconds"] == 0

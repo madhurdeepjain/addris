@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, status
 
 from app.routing.optimizer import compute_route
 from app.schemas.extraction import RouteRequest, RouteResponse
+from app.services.geocoding import reverse_geocode
 
 
 router = APIRouter()
@@ -23,12 +24,17 @@ async def create_route(payload: RouteRequest) -> RouteResponse:
         )
 
     nodes: list[tuple[str, float, float]] = []
+    origin_address: str | None = None
     if payload.origin is not None:
-        origin_label = payload.origin.label or "Origin"
+        origin_address = await reverse_geocode(
+            payload.origin.latitude, payload.origin.longitude
+        )
+        origin_label = payload.origin.label or origin_address or "Origin"
         nodes.append((origin_label, payload.origin.latitude, payload.origin.longitude))
 
-    for stop in payload.stops:
-        nodes.append((stop.label, stop.latitude, stop.longitude))
+    for index, stop in enumerate(payload.stops, start=1):
+        label = stop.label or f"Stop {index}"
+        nodes.append((label, stop.latitude, stop.longitude))
 
     if not nodes:
         raise HTTPException(
@@ -36,4 +42,15 @@ async def create_route(payload: RouteRequest) -> RouteResponse:
         )
 
     route = await asyncio.to_thread(compute_route, nodes)
-    return RouteResponse(route=list(route))
+    total_distance = sum(
+        leg.distance_meters or 0.0 for leg in route if leg.distance_meters is not None
+    )
+    total_eta = sum(
+        leg.eta_seconds or 0 for leg in route if leg.eta_seconds is not None
+    )
+    return RouteResponse(
+        route=list(route),
+        total_distance_meters=total_distance,
+        total_eta_seconds=total_eta,
+        origin_address=origin_address,
+    )

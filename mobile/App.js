@@ -7,7 +7,6 @@ import {
   Image,
   Easing,
   LayoutAnimation,
-  Linking,
   Modal,
   Platform,
   Pressable,
@@ -22,6 +21,7 @@ import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
 import { QueryClient, QueryClientProvider, useMutation } from '@tanstack/react-query';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { showLocation } from 'react-native-map-link';
 
 const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://127.0.0.1:8000';
 
@@ -35,7 +35,10 @@ function WorkflowScreen() {
   const [images, setImages] = useState([]);
   const [activeImageId, setActiveImageId] = useState(null);
   const [location, setLocation] = useState(null);
+  const [reverseGeocodeError, setReverseGeocodeError] = useState(null);
+  const [isRefreshingLocation, setIsRefreshingLocation] = useState(false);
   const [routeLegs, setRouteLegs] = useState([]);
+  const [routeSummary, setRouteSummary] = useState(null);
   const [selectedOverlayVisible, setSelectedOverlayVisible] = useState(false);
   const [routeSummaryVisible, setRouteSummaryVisible] = useState(false);
   const [routeTrackWidth, setRouteTrackWidth] = useState(0);
@@ -49,6 +52,77 @@ function WorkflowScreen() {
   const routeButtonTraveler = useRef(new Animated.Value(0)).current;
   const routeButtonSpinner = useRef(new Animated.Value(0)).current;
 
+  const fetchLocation = useCallback(async () => {
+    try {
+      setReverseGeocodeError(null);
+      let permission = await Location.getForegroundPermissionsAsync();
+      let status = permission.status;
+      if (status !== 'granted') {
+        permission = await Location.requestForegroundPermissionsAsync();
+        status = permission.status;
+      }
+
+      if (status !== 'granted') {
+        setReverseGeocodeError('Location permission not granted.');
+        Alert.alert('Location unavailable', 'Location permission is required to determine your current address.');
+        return;
+      }
+
+      const current = await Location.getCurrentPositionAsync({});
+      const coords = {
+        latitude: current.coords.latitude,
+        longitude: current.coords.longitude,
+      };
+      setLocation(coords);
+
+      try {
+        const [place] = await Location.reverseGeocodeAsync({
+          latitude: coords.latitude,
+          longitude: coords.longitude,
+        });
+
+        if (place) {
+          const parts = [
+            place.name,
+            place.street,
+            place.postalCode,
+            place.city,
+            place.region,
+          ]
+            .map((value) => (value ? String(value).trim() : ''))
+            .filter(Boolean);
+
+          setLocation({
+            ...coords,
+            address: parts.length ? parts.join(', ') : undefined,
+          });
+          setReverseGeocodeError(null);
+        }
+      } catch (reverseError) {
+        console.warn('Reverse geocoding failed', reverseError);
+        setReverseGeocodeError(
+          reverseError instanceof Error ? reverseError.message : String(reverseError),
+        );
+      }
+    } catch (error) {
+      console.warn('Location refresh failed', error);
+      Alert.alert('Location unavailable', 'Unable to retrieve your current location.');
+    }
+  }, []);
+
+  const handleRefreshLocation = useCallback(async () => {
+    if (isRefreshingLocation) {
+      return;
+    }
+
+    setIsRefreshingLocation(true);
+    try {
+      await fetchLocation();
+    } finally {
+      setIsRefreshingLocation(false);
+    }
+  }, [fetchLocation, isRefreshingLocation]);
+
   useEffect(() => {
     (async () => {
       const camera = await ImagePicker.requestCameraPermissionsAsync();
@@ -61,16 +135,9 @@ function WorkflowScreen() {
         Alert.alert('Permission required', 'Photo library access is needed to pick images.');
       }
 
-      const locationPermission = await Location.requestForegroundPermissionsAsync();
-      if (locationPermission.status === 'granted') {
-        const current = await Location.getCurrentPositionAsync({});
-        setLocation({
-          latitude: current.coords.latitude,
-          longitude: current.coords.longitude,
-        });
-      }
+      await fetchLocation();
     })();
-  }, []);
+  }, [fetchLocation]);
 
   useEffect(() => {
     Animated.timing(heroAnim, {
@@ -86,6 +153,7 @@ function WorkflowScreen() {
       setActiveImageId(null);
       setRouteLegs([]);
       setRouteSummaryVisible(false);
+      setRouteSummary(null);
       return;
     }
 
@@ -93,6 +161,19 @@ function WorkflowScreen() {
       setActiveImageId(images[images.length - 1].id);
     }
   }, [images, activeImageId]);
+
+  const locationLabel = useMemo(() => {
+    if (!location) {
+      return null;
+    }
+    if (location.address) {
+      return location.address;
+    }
+    if (location.latitude != null && location.longitude != null) {
+      return `${location.latitude.toFixed(4)}, ${location.longitude.toFixed(4)}`;
+    }
+    return null;
+  }, [location]);
 
   const extractMutation = useMutation({
     mutationFn: async ({ asset }) => {
@@ -186,13 +267,25 @@ function WorkflowScreen() {
     onSuccess: (data) => {
       const legs = (data.route ?? []).map((leg, index) => ({
         order: leg.order ?? index,
-        label: leg.label ?? `Stop ${index + 1}`,
+        label:
+          index === 0 && locationLabel
+            ? locationLabel
+            : leg.label ?? `Stop ${index + 1}`,
         latitude: leg.latitude,
         longitude: leg.longitude,
+        distanceMeters: leg.distance_meters ?? null,
+        cumulativeDistanceMeters: leg.cumulative_distance_meters ?? null,
+        etaSeconds: leg.eta_seconds ?? null,
+        cumulativeEtaSeconds: leg.cumulative_eta_seconds ?? null,
       }));
       LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
       setRouteLegs(legs);
       setRouteSummaryVisible(legs.length > 0);
+      setRouteSummary({
+        totalDistanceMeters: data.total_distance_meters ?? null,
+        totalEtaSeconds: data.total_eta_seconds ?? null,
+        originAddress: locationLabel ?? data.origin_address ?? null,
+      });
     },
     onError: (error) => {
       Alert.alert('Route optimization failed', error.message ?? 'Unable to compute route.');
@@ -416,6 +509,7 @@ function WorkflowScreen() {
     setImages((prev) => prev.filter((item) => item.id !== imageId));
     setRouteLegs([]);
     setRouteSummaryVisible(false);
+    setRouteSummary(null);
   }, []);
 
   const toggleCandidate = useCallback((imageId, candidateId) => {
@@ -519,44 +613,68 @@ function WorkflowScreen() {
     }
 
     setRouteLegs([]);
+    setRouteSummary(null);
     setRouteSummaryVisible(false);
     computeRouteMutation.mutate(payload);
   }, [selectedCandidates, selectedCount, location, computeRouteMutation, displayLabel]);
 
-  const handleOpenRoute = useCallback(() => {
+  const handleOpenRoute = useCallback(async () => {
     if (!routeLegs.length) {
       return;
     }
 
-    if (routeLegs.length === 1) {
-      const target = routeLegs[0];
-      const query = `${target.latitude},${target.longitude}`;
-      const url = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
-      Linking.openURL(url).catch(() => {
-        Alert.alert('Navigation unavailable', 'Unable to open the maps application.');
-      });
+    const validLegs = routeLegs.filter(
+      (leg) => typeof leg.latitude === 'number' && typeof leg.longitude === 'number',
+    );
+
+    if (!validLegs.length) {
+      Alert.alert('Navigation unavailable', 'No coordinates available for this route.');
       return;
     }
 
-    const origin = routeLegs[0];
-    const destination = routeLegs[routeLegs.length - 1];
-    const waypoints = routeLegs
-      .slice(1, -1)
-      .map((leg) => `${leg.latitude},${leg.longitude}`)
-      .join('|');
+    const origin = validLegs[0];
+    const destination = validLegs[validLegs.length - 1];
+    const isSingleStop = validLegs.length === 1;
 
-    const params = [
-      `origin=${encodeURIComponent(`${origin.latitude},${origin.longitude}`)}`,
-      `destination=${encodeURIComponent(`${destination.latitude},${destination.longitude}`)}`,
-    ];
-    if (waypoints) {
-      params.push(`waypoints=${encodeURIComponent(waypoints)}`);
-    }
+    try {
+      if (isSingleStop) {
+        await showLocation({
+          latitude: origin.latitude,
+          longitude: origin.longitude,
+          title: origin.label ?? 'Stop',
+          alwaysIncludeGoogle: true,
+          googleForceLatLon: true,
+          cancelText: 'Cancel',
+        });
+        return;
+      }
 
-    const url = `https://www.google.com/maps/dir/?api=1&${params.join('&')}`;
-    Linking.openURL(url).catch(() => {
+      const intermediateLegs = validLegs.slice(1, validLegs.length - 1);
+
+      await showLocation({
+        latitude: destination.latitude,
+        longitude: destination.longitude,
+        title: destination.label ?? 'Destination',
+        sourceLatitude: origin.latitude,
+        sourceLongitude: origin.longitude,
+        alwaysIncludeGoogle: true,
+        googleForceLatLon: true,
+  cancelText: 'Cancel',
+        directionsMode: 'driving',
+        ...(intermediateLegs.length
+          ? {
+              points: intermediateLegs.map((leg, index) => ({
+                latitude: leg.latitude,
+                longitude: leg.longitude,
+                title: leg.label ?? `Stop ${index + 1}`,
+              })),
+            }
+          : {}),
+      });
+    } catch (error) {
+      console.warn('Failed to open maps link', error);
       Alert.alert('Navigation unavailable', 'Unable to open the maps application.');
-    });
+    }
   }, [routeLegs]);
 
   const heroTranslateY = heroAnim.interpolate({ inputRange: [0, 1], outputRange: [18, 0] });
@@ -584,6 +702,29 @@ function WorkflowScreen() {
   });
   const hasImages = images.length > 0;
 
+  const formatDistance = useCallback((meters) => {
+    if (meters == null) {
+      return null;
+    }
+    const value = Math.abs(meters);
+    if (value >= 1000) {
+      return `${(value / 1000).toFixed(value >= 10000 ? 0 : 1)} km`;
+    }
+    return `${Math.round(value)} m`;
+  }, []);
+
+  const formatDuration = useCallback((seconds) => {
+    if (seconds == null) {
+      return null;
+    }
+    const value = Math.max(0, seconds);
+    const hours = Math.floor(value / 3600);
+    const minutes = Math.floor((value % 3600) / 60);
+    if (hours > 0) {
+      return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+    }
+    return `${Math.max(1, minutes)}m`;
+  }, []);
   return (
     <SafeAreaView style={styles.safeArea}>
       <ScrollView contentContainerStyle={styles.container}>
@@ -606,6 +747,40 @@ function WorkflowScreen() {
             <MaterialCommunityIcons name="truck-fast-outline" size={48} color="#bfdbfe" />
           </View>
         </Animated.View>
+
+        {(locationLabel || reverseGeocodeError) && (
+          <View style={styles.locationCard}>
+            <View style={styles.locationHeader}>
+              <View style={styles.locationRow}>
+                <MaterialCommunityIcons name="crosshairs-gps" size={18} color="#38bdf8" />
+                <Text style={styles.locationLabel}>You are here</Text>
+              </View>
+              <Pressable
+                onPress={handleRefreshLocation}
+                disabled={isRefreshingLocation}
+                style={({ pressed }) => [
+                  styles.locationRefreshButton,
+                  isRefreshingLocation && styles.locationRefreshButtonDisabled,
+                  pressed && !isRefreshingLocation && styles.locationRefreshButtonPressed,
+                ]}
+              >
+                {isRefreshingLocation ? (
+                  <ActivityIndicator size="small" color="#38bdf8" />
+                ) : (
+                  <View style={styles.locationRefreshContent}>
+                    <Ionicons name="refresh" size={16} color="#38bdf8" />
+                    <Text style={styles.locationRefreshLabel}>Refresh</Text>
+                  </View>
+                )}
+              </Pressable>
+            </View>
+            {locationLabel ? (
+              <Text style={styles.locationValue}>{locationLabel}</Text>
+            ) : (
+              <Text style={styles.locationError}>Unable to resolve your location address.</Text>
+            )}
+          </View>
+        )}
 
         <Animated.View
           style={[
@@ -764,6 +939,11 @@ function WorkflowScreen() {
               >
                 <MaterialCommunityIcons name="map-marker-check-outline" size={16} color="#166534" />
                 <Text style={styles.statusPillReadyText}>Route ready</Text>
+                {routeSummary?.totalDistanceMeters != null && (
+                  <Text style={styles.statusPillReadyMeta}>
+                    {formatDistance(routeSummary.totalDistanceMeters)}
+                  </Text>
+                )}
                 <Text style={styles.statusPillReadyAction}>View</Text>
               </Pressable>
             )}
@@ -1060,6 +1240,36 @@ function WorkflowScreen() {
               <MaterialCommunityIcons name="map-marker-path" size={22} color="#166534" />
               <Text style={styles.modalTitle}>Optimized route</Text>
             </View>
+            {routeSummary && (
+              <View style={styles.routeSummaryCard}>
+                {routeSummary.originAddress ? (
+                  <View style={styles.routeSummaryRow}>
+                    <MaterialCommunityIcons name="crosshairs-gps" size={18} color="#166534" />
+                    <Text style={styles.routeSummaryText} numberOfLines={2}>
+                      {routeSummary.originAddress}
+                    </Text>
+                  </View>
+                ) : null}
+                <View style={styles.routeSummaryMetrics}>
+                  {routeSummary.totalDistanceMeters != null && (
+                    <View style={styles.routeSummaryMetric}>
+                      <Text style={styles.routeSummaryMetricLabel}>Distance</Text>
+                      <Text style={styles.routeSummaryMetricValue}>
+                        {formatDistance(routeSummary.totalDistanceMeters)}
+                      </Text>
+                    </View>
+                  )}
+                  {routeSummary.totalEtaSeconds != null && (
+                    <View style={styles.routeSummaryMetric}>
+                      <Text style={styles.routeSummaryMetricLabel}>ETA</Text>
+                      <Text style={styles.routeSummaryMetricValue}>
+                        {formatDuration(routeSummary.totalEtaSeconds)}
+                      </Text>
+                    </View>
+                  )}
+                </View>
+              </View>
+            )}
             <ScrollView style={styles.modalScroll}>
               {routeLegs.map((leg) => (
                 <View key={leg.order} style={styles.routeStep}>
@@ -1072,6 +1282,34 @@ function WorkflowScreen() {
                       <Text style={styles.routeCoords}>
                         {leg.latitude.toFixed(4)}, {leg.longitude.toFixed(4)}
                       </Text>
+                    )}
+                    {(leg.distanceMeters != null || leg.etaSeconds != null) && (
+                      <View style={styles.routeLegMetaRow}>
+                        {leg.distanceMeters != null && (
+                          <Text style={styles.routeLegMeta}>
+                            Leg: {formatDistance(leg.distanceMeters)}
+                          </Text>
+                        )}
+                        {leg.etaSeconds != null && (
+                          <Text style={styles.routeLegMeta}>
+                            {formatDuration(leg.etaSeconds)}
+                          </Text>
+                        )}
+                      </View>
+                    )}
+                    {(leg.cumulativeDistanceMeters != null || leg.cumulativeEtaSeconds != null) && (
+                      <View style={styles.routeLegMetaRow}>
+                        {leg.cumulativeDistanceMeters != null && (
+                          <Text style={styles.routeLegMetaSub}>
+                            Total: {formatDistance(leg.cumulativeDistanceMeters)}
+                          </Text>
+                        )}
+                        {leg.cumulativeEtaSeconds != null && (
+                          <Text style={styles.routeLegMetaSub}>
+                            {formatDuration(leg.cumulativeEtaSeconds)} overall
+                          </Text>
+                        )}
+                      </View>
                     )}
                   </View>
                 </View>
@@ -1168,6 +1406,69 @@ const styles = StyleSheet.create({
     color: '#e0e7ff',
     marginTop: 8,
     lineHeight: 20,
+  },
+  locationCard: {
+    backgroundColor: '#0f172a',
+    borderRadius: 16,
+    padding: 16,
+    gap: 8,
+    shadowColor: '#0f172a',
+    shadowOpacity: 0.1,
+    shadowOffset: { width: 0, height: 6 },
+    shadowRadius: 12,
+    elevation: 4,
+  },
+  locationHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  locationRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  locationLabel: {
+    fontSize: 13,
+    color: '#38bdf8',
+    fontWeight: '700',
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+  },
+  locationValue: {
+    fontSize: 15,
+    color: '#e0f2fe',
+    fontWeight: '600',
+    lineHeight: 20,
+  },
+  locationError: {
+    fontSize: 13,
+    color: '#fecaca',
+  },
+  locationRefreshButton: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(56, 189, 248, 0.4)',
+    backgroundColor: 'rgba(14, 116, 144, 0.16)',
+  },
+  locationRefreshButtonDisabled: {
+    opacity: 0.6,
+  },
+  locationRefreshButtonPressed: {
+    opacity: 0.8,
+  },
+  locationRefreshContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  locationRefreshLabel: {
+    fontSize: 13,
+    color: '#38bdf8',
+    fontWeight: '600',
   },
   heroIcon: {
     width: 72,
@@ -1381,6 +1682,11 @@ const styles = StyleSheet.create({
     color: '#166534',
     fontWeight: '600',
     textTransform: 'uppercase',
+  },
+  statusPillReadyMeta: {
+    fontSize: 12,
+    color: '#0f766e',
+    fontWeight: '600',
   },
   processingBanner: {
     backgroundColor: '#e0f2fe',
@@ -1694,6 +2000,44 @@ const styles = StyleSheet.create({
   modalScroll: {
     maxHeight: 360,
   },
+  routeSummaryCard: {
+    backgroundColor: '#f0fdf4',
+    borderRadius: 16,
+    padding: 14,
+    gap: 10,
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
+  },
+  routeSummaryRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  routeSummaryText: {
+    flex: 1,
+    fontSize: 14,
+    color: '#14532d',
+    fontWeight: '600',
+  },
+  routeSummaryMetrics: {
+    flexDirection: 'row',
+    gap: 16,
+  },
+  routeSummaryMetric: {
+    flex: 1,
+    gap: 4,
+  },
+  routeSummaryMetricLabel: {
+    fontSize: 12,
+    color: '#166534',
+    fontWeight: '600',
+    textTransform: 'uppercase',
+  },
+  routeSummaryMetricValue: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
   modalAddressMeta: {
     fontSize: 13,
     color: '#475569',
@@ -1836,6 +2180,20 @@ const styles = StyleSheet.create({
   },
   routeCoords: {
     fontSize: 13,
+    color: '#475569',
+  },
+  routeLegMetaRow: {
+    flexDirection: 'row',
+    gap: 12,
+    flexWrap: 'wrap',
+  },
+  routeLegMeta: {
+    fontSize: 13,
+    color: '#0f172a',
+    fontWeight: '500',
+  },
+  routeLegMetaSub: {
+    fontSize: 12,
     color: '#475569',
   },
 });
