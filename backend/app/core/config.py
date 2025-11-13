@@ -14,10 +14,15 @@ class Settings(BaseSettings):
     debug: bool = Field(False, alias="ADDRIS_DEBUG")
     storage_root: Path = Field(Path("./data"), alias="ADDRIS_STORAGE_ROOT")
 
-    geocoder_base_url: str = Field(
-        "https://nominatim.openstreetmap.org", alias="ADDRIS_GEOCODER_BASE_URL"
+    geocoder_provider: Literal["google", "nominatim", "bing", "azure", "mapbox"] = (
+        Field("google", alias="ADDRIS_GEOCODER_PROVIDER")
     )
-    geocoder_email: str | None = Field(None, alias="ADDRIS_GEOCODER_EMAIL")
+    geocoder_api_key: str | None = Field(None, alias="ADDRIS_GEOCODER_API_KEY")
+    geocoder_user_agent: str = Field(
+        "addris-geocoder", alias="ADDRIS_GEOCODER_USER_AGENT"
+    )
+    geocoder_domain: str | None = Field(None, alias="ADDRIS_GEOCODER_DOMAIN")
+    geocoder_timeout: float = Field(10.0, alias="ADDRIS_GEOCODER_TIMEOUT")
 
     ocr_backend: Literal["easyocr", "tesseract"] = Field(
         "easyocr", alias="ADDRIS_OCR_BACKEND"
@@ -35,6 +40,12 @@ class Settings(BaseSettings):
         path = Path(value).expanduser()
         path.mkdir(parents=True, exist_ok=True)
         return path
+
+    @field_validator("geocoder_provider", mode="before")
+    def _normalize_provider(cls, value: str) -> str:
+        if isinstance(value, str):
+            return value.strip().lower()
+        return value
 
 
 @lru_cache(maxsize=1)

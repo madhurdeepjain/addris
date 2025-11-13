@@ -1,21 +1,38 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
 import re
-from typing import Mapping
+from dataclasses import dataclass
+from typing import Mapping, TYPE_CHECKING, cast
 
-import httpx
 from cachetools import TTLCache
+from geopy.exc import (
+    GeocoderQuotaExceeded,
+    GeocoderServiceError,
+    GeocoderTimedOut,
+    GeocoderUnavailable,
+    GeopyError,
+)
+from geopy.geocoders import get_geocoder_for_service
+from geopy.geocoders.base import Geocoder
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
 
+if TYPE_CHECKING:  # pragma: no cover - typing helpers only
+    from app.core.config import Settings
+    from geopy.location import Location
+
 _logger = get_logger(__name__)
 _cache = TTLCache(maxsize=512, ttl=60 * 60 * 24)
 _cache_lock = asyncio.Lock()
-_client_lock = asyncio.Lock()
-_client: httpx.AsyncClient | None = None
+_geocoder_lock = asyncio.Lock()
+_geocode_call_lock = asyncio.Lock()
+_geocoder: Geocoder | None = None
+
+
+class GeocodeConfigurationError(RuntimeError):
+    """Raised when the geocoder cannot be configured with provided settings."""
 
 
 @dataclass(slots=True)
@@ -81,55 +98,170 @@ async def geocode_address(
 
 async def _fetch(query: str) -> GeocodeResult:
     settings = get_settings()
-    client = await _get_client()
-    url = settings.geocoder_base_url.rstrip("/") + "/search"
-    params = {
-        "format": "jsonv2",
-        "limit": 1,
-        "addressdetails": 1,
-        "q": query,
-    }
-    if settings.geocoder_email:
-        params["email"] = settings.geocoder_email
+    try:
+        location = await _geocode(query)
+    except GeocodeConfigurationError as exc:
+        _logger.error("Geocoding misconfiguration", error=str(exc))
+        return GeocodeResult(None, None, 0.0, message=str(exc))
+    except (GeocoderQuotaExceeded, GeocoderTimedOut) as exc:
+        retry_message = (
+            "Geocoding quota exceeded"
+            if isinstance(exc, GeocoderQuotaExceeded)
+            else "Geocoding timed out"
+        )
+        return GeocodeResult(None, None, 0.0, message=retry_message)
+    except (GeocoderServiceError, GeocoderUnavailable, GeopyError) as exc:
+        return GeocodeResult(None, None, 0.0, message=str(exc))
 
-    for attempt in range(3):
-        response = await client.get(url, params=params)
-        if response.status_code == 429:
-            retry_after = float(response.headers.get("Retry-After", "1"))
-            await asyncio.sleep(retry_after)
-            continue
-        response.raise_for_status()
-        payload = response.json()
-        if not payload:
-            return GeocodeResult(None, None, 0.0, message="No geocoding candidates")
-        candidate = payload[0]
-        try:
-            lat = float(candidate.get("lat"))
-            lon = float(candidate.get("lon"))
-        except (TypeError, ValueError):
-            return GeocodeResult(None, None, 0.0, message="Invalid geocoder response")
+    if location is None:
+        return GeocodeResult(None, None, 0.0, message="No geocoding candidates")
 
-        importance = candidate.get("importance") or 0.0
-        try:
-            confidence = max(0.0, min(1.0, float(importance)))
-        except (TypeError, ValueError):
-            confidence = 0.5
+    latitude = getattr(location, "latitude", None)
+    longitude = getattr(location, "longitude", None)
+    if latitude is None or longitude is None:
+        return GeocodeResult(None, None, 0.0, message="Invalid geocoder response")
 
-    resolved_label = candidate.get("display_name")
+    resolved_label = getattr(location, "address", None)
+    raw_obj = getattr(location, "raw", {}) or {}
+    if isinstance(raw_obj, Mapping):
+        raw: Mapping[str, object] = cast(Mapping[str, object], raw_obj)
+    else:
+        raw = {}
+
+    if not resolved_label:
+        display_name = raw.get("display_name")
+        if isinstance(display_name, str):
+            resolved_label = display_name
+
+    confidence = _extract_confidence(settings.geocoder_provider, raw)
+
     return GeocodeResult(
-        lat, lon, confidence, message=None, resolved_label=resolved_label
+        float(latitude),
+        float(longitude),
+        confidence,
+        message=None,
+        resolved_label=resolved_label,
     )
 
-    raise RuntimeError("Geocoder exhausted retries")
+
+async def _geocode(query: str) -> "Location | None":
+    geocoder = await _get_geocoder()
+    settings = get_settings()
+    kwargs: dict[str, object] = {"exactly_one": True}
+    if settings.geocoder_provider == "nominatim":
+        kwargs["addressdetails"] = True
+
+    async with _geocode_call_lock:
+        return await asyncio.to_thread(geocoder.geocode, query, **kwargs)
 
 
-async def _get_client() -> httpx.AsyncClient:
-    global _client
-    async with _client_lock:
-        if _client is None:
-            headers = {"User-Agent": "Addris/0.1 (+https://example.com)"}
-            _client = httpx.AsyncClient(timeout=15.0, headers=headers)
-        return _client
+async def _get_geocoder() -> Geocoder:
+    global _geocoder
+    async with _geocoder_lock:
+        if _geocoder is None:
+            settings = get_settings()
+            _geocoder = _create_geocoder(settings)
+        return _geocoder
+
+
+def _create_geocoder(settings: "Settings") -> Geocoder:
+    provider = settings.geocoder_provider
+    timeout = settings.geocoder_timeout
+    user_agent = settings.geocoder_user_agent or "addris-geocoder"
+
+    if provider == "google":
+        api_key = _require_api_key(provider, settings.geocoder_api_key)
+        geocoder_cls = get_geocoder_for_service("googlev3")
+        kwargs = {"api_key": api_key, "timeout": timeout, "user_agent": user_agent}
+        if settings.geocoder_domain:
+            kwargs["domain"] = settings.geocoder_domain
+        return geocoder_cls(**kwargs)
+
+    if provider == "nominatim":
+        geocoder_cls = get_geocoder_for_service("nominatim")
+        kwargs = {"user_agent": user_agent, "timeout": timeout}
+        if settings.geocoder_domain:
+            kwargs["domain"] = settings.geocoder_domain
+        if settings.geocoder_api_key:
+            kwargs["api_key"] = settings.geocoder_api_key
+        return geocoder_cls(**kwargs)
+
+    if provider == "bing":
+        api_key = _require_api_key(provider, settings.geocoder_api_key)
+        geocoder_cls = get_geocoder_for_service("bing")
+        return geocoder_cls(api_key=api_key, timeout=timeout, user_agent=user_agent)
+
+    if provider == "azure":
+        api_key = _require_api_key(provider, settings.geocoder_api_key)
+        geocoder_cls = get_geocoder_for_service("azuremaps")
+        return geocoder_cls(
+            subscription_key=api_key, timeout=timeout, user_agent=user_agent
+        )
+
+    if provider == "mapbox":
+        api_key = _require_api_key(provider, settings.geocoder_api_key)
+        geocoder_cls = get_geocoder_for_service("mapbox")
+        return geocoder_cls(
+            access_token=api_key, timeout=timeout, user_agent=user_agent
+        )
+
+    raise GeocodeConfigurationError(f"Unsupported geocoder provider '{provider}'")
+
+
+def _require_api_key(provider: str, value: str | None) -> str:
+    if value and value.strip():
+        return value.strip()
+    raise GeocodeConfigurationError(
+        f"Geocoder provider '{provider}' requires ADDRIS_GEOCODER_API_KEY to be set"
+    )
+
+
+def _extract_confidence(provider: str, raw: Mapping[str, object]) -> float:
+    try:
+        if provider == "nominatim":
+            importance = raw.get("importance")
+            if importance is not None:
+                return _clamp_confidence(float(importance))
+
+        if provider == "google":
+            geometry = raw.get("geometry")
+            if isinstance(geometry, Mapping):
+                location_type = geometry.get("location_type")
+                if isinstance(location_type, str):
+                    mapping = {
+                        "ROOFTOP": 1.0,
+                        "RANGE_INTERPOLATED": 0.7,
+                        "GEOMETRIC_CENTER": 0.6,
+                        "APPROXIMATE": 0.4,
+                    }
+                    if location_type in mapping:
+                        return mapping[location_type]
+
+        if provider == "bing":
+            confidence = raw.get("confidence")
+            if isinstance(confidence, str):
+                mapping = {"high": 0.9, "medium": 0.6, "low": 0.3}
+                lowered = confidence.lower()
+                if lowered in mapping:
+                    return mapping[lowered]
+
+        if provider == "azure":
+            score = raw.get("score")
+            if isinstance(score, (int, float)):
+                return _clamp_confidence(float(score))
+
+        if provider == "mapbox":
+            relevance = raw.get("relevance")
+            if isinstance(relevance, (int, float)):
+                return _clamp_confidence(float(relevance))
+    except (TypeError, ValueError):  # pragma: no cover - defensive
+        return 0.5
+
+    return 0.5
+
+
+def _clamp_confidence(value: float) -> float:
+    return max(0.0, min(1.0, value))
 
 
 def _compose_queries(parsed: Mapping[str, str], raw_text: str) -> list[str]:
