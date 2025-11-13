@@ -2,10 +2,10 @@
 
 Addris is an end-to-end address intelligence platform. Couriers capture delivery documents with the mobile app, the FastAPI backend runs OCR and address parsing, validates locations via geocoding, and returns an optimized multi-stop route that can be launched in navigation apps.
 
-<center>
-<img src="assets/dashboard.png" height="500">
-<img src="assets/route.png" height="500">
-</center>
+<div align="center" style="display:flex; justify-content:center; gap:24px;">
+   <img src="assets/dashboard.png" height="500" alt="Addris mobile dashboard screenshot">
+   <img src="assets/route.png" height="500" alt="Addris optimized route screenshot">
+</div>
 
 ---
 
