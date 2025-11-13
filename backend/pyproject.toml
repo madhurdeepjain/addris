@@ -28,6 +28,7 @@ dependencies = [
     "structlog>=24.1.0",
     "python-dotenv>=1.0.1",
     "rich>=13.7.1",
+    "opencv-python>=4.11.0.86",
 ]
 
 [project.optional-dependencies]
