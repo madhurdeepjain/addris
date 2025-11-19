@@ -12,7 +12,7 @@ from app.core.logging import get_logger
 
 
 _TESSERACT_CONFIG = "--oem 3 --psm 6"
-_MAX_RESULTS = 10
+_MAX_RESULTS = 50
 _EASYOCR_LANGUAGES = ("en",)
 _DEFAULT_EASYOCR_CONFIDENCE = 0.5
 _logger = get_logger(__name__)
@@ -74,7 +74,8 @@ def _run_with_tesseract(image_path: Path) -> Sequence[tuple[str, float]]:
         raise RuntimeError(f"Tesseract OCR failed: {exc}") from exc
 
     lines = _aggregate_lines(ocr_data)
-    lines.sort(key=lambda item: item.confidence, reverse=True)
+    # Return lines in reading order to support multi-line address extraction
+    # lines.sort(key=lambda item: item.confidence, reverse=True)
     results = [(line.text, line.confidence) for line in lines[:_MAX_RESULTS]]
     _logger.debug("Tesseract candidates", count=len(results))
     return results
@@ -146,7 +147,8 @@ def _run_with_easyocr(image_path: Path) -> Sequence[tuple[str, float]]:
         clamped_conf = max(0.0, min(1.0, conf_value))
         lines.append(OCRLine(normalized_text, clamped_conf))
 
-    lines.sort(key=lambda item: item.confidence, reverse=True)
+    # Return lines in reading order to support multi-line address extraction
+    # lines.sort(key=lambda item: item.confidence, reverse=True)
     trimmed = [(line.text, line.confidence) for line in lines[:_MAX_RESULTS]]
     _logger.debug("EasyOCR candidates", count=len(trimmed))
     return trimmed

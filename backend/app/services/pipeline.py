@@ -44,8 +44,18 @@ async def extract_address_candidates(
         **context,
     )
 
+    # Generate expanded candidates using sliding windows
+    text_candidates = _generate_text_candidates(ocr_results)
+    _logger.info(
+        "Generated text candidates",
+        count=len(text_candidates),
+        **context,
+    )
+
     addresses: list[AddressCandidate] = []
-    for text, confidence in ocr_results:
+    seen_parsed: dict[str, AddressCandidate] = {}
+
+    for text, confidence in text_candidates:
         try:
             parsed = await asyncio.to_thread(address_parser, text)
         except Exception as parse_error:  # pragma: no cover - defensive
@@ -96,6 +106,10 @@ async def extract_address_candidates(
             log_payload["validation_error"] = validation_error_message
         _logger.info("Address parsed", **log_payload)
 
+        # Skip if we didn't get a valid parse
+        if not parsed:
+            continue
+
         geocode_result = await _geocode_candidate(
             parsed,
             text,
@@ -120,7 +134,25 @@ async def extract_address_candidates(
             geocode_result,
             parsed,
         )
-        addresses.append(candidate)
+
+        # Deduplication logic
+        # Create a canonical representation of the address for deduplication
+        # We use the resolved label if available, otherwise a sorted tuple of components
+        if candidate.parsed:
+            if "resolved_label" in candidate.parsed:
+                dedupe_key = candidate.parsed["resolved_label"]
+            else:
+                # Fallback to sorted key-value pairs
+                dedupe_key = str(sorted(candidate.parsed.items()))
+
+            # If we haven't seen this address, or this candidate has higher confidence, store it
+            if (
+                dedupe_key not in seen_parsed
+                or candidate.confidence > seen_parsed[dedupe_key].confidence
+            ):
+                seen_parsed[dedupe_key] = candidate
+
+    addresses = list(seen_parsed.values())
 
     _logger.info(
         "Address extraction completed",
@@ -129,6 +161,34 @@ async def extract_address_candidates(
     )
 
     return addresses
+
+
+def _generate_text_candidates(ocr_results: OCRResult) -> list[tuple[str, float]]:
+    """Generate text candidates using sliding windows to capture multi-line addresses."""
+    candidates = []
+
+    # 1. Individual lines
+    candidates.extend(ocr_results)
+
+    # 2. Window size 2 (combine adjacent lines)
+    for i in range(len(ocr_results) - 1):
+        text1, conf1 = ocr_results[i]
+        text2, conf2 = ocr_results[i + 1]
+        combined_text = f"{text1} {text2}"
+        # Average confidence
+        combined_conf = (conf1 + conf2) / 2
+        candidates.append((combined_text, combined_conf))
+
+    # 3. Window size 3 (combine 3 adjacent lines)
+    for i in range(len(ocr_results) - 2):
+        text1, conf1 = ocr_results[i]
+        text2, conf2 = ocr_results[i + 1]
+        text3, conf3 = ocr_results[i + 2]
+        combined_text = f"{text1} {text2} {text3}"
+        combined_conf = (conf1 + conf2 + conf3) / 3
+        candidates.append((combined_text, combined_conf))
+
+    return candidates
 
 
 async def _geocode_candidate(
