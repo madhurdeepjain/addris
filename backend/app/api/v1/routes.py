@@ -4,9 +4,9 @@ import asyncio
 
 from fastapi import APIRouter, HTTPException, status
 
-from app.routing.optimizer import compute_route
 from app.schemas.extraction import RouteRequest, RouteResponse
 from app.services.geocoding import reverse_geocode
+from app.services.routing import compute_route
 
 
 router = APIRouter()
@@ -42,47 +42,16 @@ async def create_route(payload: RouteRequest) -> RouteResponse:
         )
 
     result = await asyncio.to_thread(compute_route, nodes)
-    route = list(result.legs)
-
-    total_distance = sum(
-        leg.distance_meters or 0.0 for leg in route if leg.distance_meters is not None
-    )
-    total_eta = sum(
-        leg.eta_seconds or 0 for leg in route if leg.eta_seconds is not None
-    )
-    total_static_eta = 0
-    total_delay = 0
-    contains_tolls = any(bool(leg.has_toll) for leg in route)
-    total_toll_cost = 0.0
-    toll_cost_available = False
-    toll_currency: str | None = None
-
-    for leg in route:
-        if leg.static_eta_seconds is not None:
-            total_static_eta += leg.static_eta_seconds
-        elif leg.eta_seconds is not None:
-            total_static_eta += leg.eta_seconds
-
-        if leg.traffic_delay_seconds is not None:
-            total_delay += leg.traffic_delay_seconds
-
-        if leg.toll_cost is not None:
-            total_toll_cost += leg.toll_cost
-            if not toll_cost_available:
-                toll_currency = leg.toll_currency
-                toll_cost_available = True
-            elif toll_currency != leg.toll_currency:
-                toll_currency = None
 
     return RouteResponse(
-        route=route,
-        total_distance_meters=total_distance,
-        total_eta_seconds=total_eta,
-        total_static_eta_seconds=total_static_eta,
-        total_traffic_delay_seconds=total_delay,
-        total_toll_cost=total_toll_cost if toll_cost_available else None,
-        total_toll_currency=toll_currency if toll_cost_available else None,
-        contains_tolls=contains_tolls,
+        route=result.legs,
+        total_distance_meters=result.total_distance_meters,
+        total_eta_seconds=result.total_eta_seconds,
+        total_static_eta_seconds=result.total_static_eta_seconds,
+        total_traffic_delay_seconds=result.total_traffic_delay_seconds,
+        total_toll_cost=result.total_toll_cost,
+        total_toll_currency=result.total_toll_currency,
+        contains_tolls=result.contains_tolls,
         origin_address=origin_address,
         distance_provider=result.distance_provider,
         uses_live_traffic=result.uses_live_traffic,

@@ -1,4 +1,4 @@
-from app.parsing.address_parser import parse_address
+from app.services.parsing import parse_address
 
 
 def test_parse_address_basic():

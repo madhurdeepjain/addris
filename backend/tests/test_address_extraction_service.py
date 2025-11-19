@@ -5,7 +5,7 @@ from tempfile import SpooledTemporaryFile
 import pytest
 from fastapi import UploadFile
 
-from app.parsing.validation import AddressValidationResult
+from app.services.parsing import AddressValidationResult
 from app.services.address_service import AddressExtractionService
 from app.services.geocoding import GeocodeResult
 from app.services.storage import StorageService

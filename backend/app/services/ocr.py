@@ -5,10 +5,10 @@ from pathlib import Path
 from typing import Any, Sequence
 
 import cv2
-import numpy as np
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
+from app.domain.image import correct_orientation, preprocess_image
 
 
 _TESSERACT_CONFIG = "--oem 3 --psm 6"
@@ -62,8 +62,8 @@ def _run_with_tesseract(image_path: Path) -> Sequence[tuple[str, float]]:
         _logger.error("Image read failed", image_path=str(image_path))
         raise FileNotFoundError(f"Unable to read image: {image_path}")
 
-    oriented = _correct_orientation(image)
-    processed = _preprocess(oriented)
+    oriented = correct_orientation(image)
+    processed = preprocess_image(oriented)
 
     try:
         ocr_data = pytesseract.image_to_data(
@@ -152,48 +152,6 @@ def _run_with_easyocr(image_path: Path) -> Sequence[tuple[str, float]]:
     trimmed = [(line.text, line.confidence) for line in lines[:_MAX_RESULTS]]
     _logger.debug("EasyOCR candidates", count=len(trimmed))
     return trimmed
-
-
-def _preprocess(image: np.ndarray) -> np.ndarray:
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    denoised = cv2.bilateralFilter(gray, 9, 75, 75)
-    thresh = cv2.adaptiveThreshold(
-        denoised, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, 10
-    )
-    inverted = cv2.bitwise_not(thresh)
-    cleaned = cv2.medianBlur(inverted, 3)
-    return cleaned
-
-
-def _correct_orientation(image: np.ndarray) -> np.ndarray:
-    try:
-        import pytesseract
-
-        osd = pytesseract.image_to_osd(image)
-    except pytesseract.TesseractError:
-        _logger.debug("Orientation detection skipped")
-        return image
-
-    angle = 0
-    for line in osd.splitlines():
-        if "Rotate:" in line:
-            try:
-                angle = int(line.split(":")[1].strip())
-            except ValueError:
-                angle = 0
-            break
-
-    if angle and angle % 360 != 0:
-        _logger.debug("Rotating image", angle=angle)
-        return _rotate(image, -angle)
-    return image
-
-
-def _rotate(image: np.ndarray, angle: float) -> np.ndarray:
-    height, width = image.shape[:2]
-    center = (width / 2, height / 2)
-    matrix = cv2.getRotationMatrix2D(center, angle, 1.0)
-    return cv2.warpAffine(image, matrix, (width, height), flags=cv2.INTER_LINEAR)
 
 
 def _aggregate_lines(data: dict[str, list]) -> list[OCRLine]:

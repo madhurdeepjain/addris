@@ -18,6 +18,7 @@ from geopy.geocoders.base import Geocoder
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
+from app.domain.geocoding import compose_geocoding_queries
 
 if TYPE_CHECKING:  # pragma: no cover - typing helpers only
     from app.core.config import Settings
@@ -56,7 +57,7 @@ async def geocode_address(
     if not parsed:
         return GeocodeResult(None, None, 0.0, message="No address components available")
 
-    queries = _compose_queries(parsed, raw_text)
+    queries = compose_geocoding_queries(parsed, raw_text)
     last_result: GeocodeResult | None = None
 
     for query in queries:
@@ -76,7 +77,7 @@ async def geocode_address(
             result = await _fetch(query)
         except Exception as exc:  # pragma: no cover - unexpected transport errors
             _logger.warning("Geocoding failed", query=query, error=str(exc))
-            last_result = GeocodeResult(None, None, 0.0, message=str(exc))
+            last_result = GeocodeResult(None, None, 0.0, message="Geocoding failed")
             continue
 
         async with _cache_lock:
@@ -115,7 +116,8 @@ async def _fetch(query: str) -> GeocodeResult:
         )
         return GeocodeResult(None, None, 0.0, message=retry_message)
     except (GeocoderServiceError, GeocoderUnavailable, GeopyError) as exc:
-        return GeocodeResult(None, None, 0.0, message=str(exc))
+        _logger.error("Geocoding service error", error=str(exc))
+        return GeocodeResult(None, None, 0.0, message="Geocoding service unavailable")
 
     if location is None:
         return GeocodeResult(None, None, 0.0, message="No geocoding candidates")
@@ -285,70 +287,3 @@ def _extract_confidence(provider: str, raw: Mapping[str, object]) -> float:
 
 def _clamp_confidence(value: float) -> float:
     return max(0.0, min(1.0, value))
-
-
-def _compose_queries(parsed: Mapping[str, str], raw_text: str) -> list[str]:
-    priorities = [
-        "house_number",
-        "road",
-        "unit",
-        "level",
-        "city",
-        "suburb",
-        "state",
-        "postcode",
-        "country",
-    ]
-
-    normalized = {
-        key: value.strip()
-        for key, value in parsed.items()
-        if isinstance(value, str) and value.strip()
-    }
-
-    queries: list[str] = []
-
-    def build_query(components: Mapping[str, str]) -> str:
-        parts = [
-            components[key]
-            for key in priorities
-            if key in components and components[key].strip()
-        ]
-        if not parts:
-            parts = [value for value in components.values() if value.strip()]
-        deduped = dict.fromkeys(part.strip() for part in parts if part.strip())
-        return ", ".join(deduped)
-
-    primary = build_query(normalized)
-    if primary:
-        queries.append(primary)
-
-    postcode = normalized.get("postcode")
-    if postcode:
-        base_zip = _base_zip(postcode)
-        if base_zip and base_zip != postcode:
-            zip_components = dict(normalized)
-            zip_components["postcode"] = base_zip
-            alt = build_query(zip_components)
-            if alt:
-                queries.append(alt)
-
-        zipless_components = dict(normalized)
-        zipless_components.pop("postcode", None)
-        alt = build_query(zipless_components)
-        if alt:
-            queries.append(alt)
-
-    if raw_text.strip():
-        queries.append(raw_text.strip())
-
-    # Preserve order while removing duplicates
-    deduped_queries = list(dict.fromkeys(query for query in queries if query))
-    return deduped_queries or [raw_text.strip()]
-
-
-def _base_zip(postcode: str) -> str | None:
-    match = re.fullmatch(r"(\d{5})(?:[-\s]?(\d{4}))?", postcode.strip())
-    if not match:
-        return None
-    return match.group(1)

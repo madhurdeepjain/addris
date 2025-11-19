@@ -1,4 +1,4 @@
-from app.parsing.validation import validate_parsed_address
+from app.services.parsing import validate_parsed_address
 
 
 def test_validator_accepts_common_address():

@@ -10,6 +10,7 @@ import httpx
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
+from app.domain.geometry import haversine_distance
 
 
 _logger = get_logger(__name__)
@@ -205,7 +206,7 @@ def _build_haversine_matrix(
             if i == j:
                 continue
             _, lat_b, lon_b = nodes[j]
-            distance = _haversine(lat_a, lon_a, lat_b, lon_b)
+            distance = haversine_distance(lat_a, lon_a, lat_b, lon_b)
             distances[i][j] = int(round(distance))
             duration = int(round(distance / _AVERAGE_SPEED_MPS))
             durations[i][j] = duration
@@ -218,19 +219,6 @@ def _build_haversine_matrix(
         provider="haversine",
         uses_live_traffic=False,
     )
-
-
-def _haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    radius = 6_371_000.0
-    lat1_rad, lon1_rad = radians(lat1), radians(lon1)
-    lat2_rad, lon2_rad = radians(lat2), radians(lon2)
-
-    dlat = lat2_rad - lat1_rad
-    dlon = lon2_rad - lon1_rad
-
-    a = sin(dlat / 2) ** 2 + cos(lat1_rad) * cos(lat2_rad) * sin(dlon / 2) ** 2
-    c = 2 * atan2(sqrt(a), sqrt(1 - a))
-    return radius * c
 
 
 def _parse_toll_info(value: Any) -> TollInfo | None:

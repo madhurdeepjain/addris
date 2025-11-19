@@ -1,21 +1,26 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Awaitable, Callable, Sequence
 
 from fastapi import UploadFile
 
 from app.core.logging import get_logger
-from app.ocr.pipeline import run_ocr
-from app.parsing.address_parser import parse_address
-from app.parsing.validation import AddressValidationResult, validate_parsed_address
+from app.domain.text import generate_sliding_window_candidates
+from app.services.ocr import run_ocr
+from app.services.parsing import (
+    AddressValidationResult,
+    parse_address,
+    validate_parsed_address,
+)
 from app.schemas.jobs import AddressCandidate
 from app.services.geocoding import GeocodeResult, geocode_address
-from app.services.pipeline import extract_address_candidates
 from app.services.storage import StorageService
 
 
-OCRCallable = Callable[[Path], Sequence[tuple[str, float]]]
+OCRResult = Sequence[tuple[str, float]]
+OCRCallable = Callable[[Path], OCRResult]
 AddressParserCallable = Callable[[str], dict[str, str] | None]
 GeocoderCallable = Callable[[dict[str, str], str], Awaitable[GeocodeResult]]
 AddressValidatorCallable = Callable[[dict[str, str], str], AddressValidationResult]
@@ -25,7 +30,7 @@ _logger = get_logger(__name__)
 
 
 class AddressExtractionService:
-    """Handle single-image address extraction without job orchestration."""
+    """Handle single-image address extraction."""
 
     def __init__(
         self,
@@ -48,23 +53,174 @@ class AddressExtractionService:
         image_path = self._storage.save_bytes(contents, suffix)
 
         try:
-            addresses = await extract_address_candidates(
-                image_path,
-                self._ocr_runner,
-                self._address_parser,
-                self._geocoder,
-                address_validator=self._address_validator,
-            )
-            return addresses
+            return await self._process_image(image_path)
         finally:
             try:
                 image_path.unlink(missing_ok=True)
-            except OSError as exc:  # pragma: no cover - disk issues rare in tests
+            except OSError as exc:
                 _logger.warning(
                     "Failed to remove temporary image",
                     path=str(image_path),
                     error=str(exc),
                 )
+
+    async def _process_image(self, image_path: Path) -> list[AddressCandidate]:
+        _logger.info("Address extraction started", image_path=str(image_path))
+
+        # 1. Run OCR
+        ocr_results = await asyncio.to_thread(self._ocr_runner, image_path)
+        _logger.info(
+            "OCR results received",
+            candidates=len(ocr_results),
+            preview=[text for text, _ in ocr_results[:3]],
+        )
+
+        # 2. Generate Candidates
+        text_candidates = self._generate_text_candidates(ocr_results)
+
+        # 3. Parse, Validate, and Geocode
+        seen_parsed: dict[str, AddressCandidate] = {}
+
+        for text, confidence in text_candidates:
+            candidate = await self._process_candidate(text, confidence)
+            if not candidate:
+                continue
+
+            # Deduplication
+            dedupe_key = self._get_dedupe_key(candidate)
+            if (
+                dedupe_key not in seen_parsed
+                or candidate.confidence > seen_parsed[dedupe_key].confidence
+            ):
+                seen_parsed[dedupe_key] = candidate
+
+        # 4. Post-processing cleanup
+        addresses = self._filter_duplicates(list(seen_parsed.values()))
+
+        _logger.info("Address extraction completed", total=len(addresses))
+        return addresses
+
+    def _filter_duplicates(
+        self, candidates: list[AddressCandidate]
+    ) -> list[AddressCandidate]:
+        """
+        Aggressively filter duplicates.
+        If we have a validated version of an address, discard any failed versions
+        that share the same core components (House #, Road, City, State).
+        """
+        groups: dict[str, list[AddressCandidate]] = {}
+        for c in candidates:
+            key = self._get_loose_dedupe_key(c)
+            groups.setdefault(key, []).append(c)
+
+        results = []
+        for group in groups.values():
+            validated = [c for c in group if c.status == "validated"]
+            if validated:
+                # If we have validated candidates, only return those
+                results.extend(validated)
+            else:
+                # Otherwise, return the single best candidate based on confidence
+                best = max(group, key=lambda x: x.confidence)
+                results.append(best)
+
+        return results
+
+    def _get_loose_dedupe_key(self, candidate: AddressCandidate) -> str:
+        """Generate a loose key based on core address components."""
+        if not candidate.parsed:
+            return candidate.raw_text
+
+        components = [
+            candidate.parsed.get("house_number", ""),
+            candidate.parsed.get("road", ""),
+            candidate.parsed.get("city", ""),
+            candidate.parsed.get("state", ""),
+        ]
+        # Normalize: lowercase and strip
+        return "|".join(c.lower().strip() for c in components)
+
+    async def _process_candidate(
+        self, text: str, confidence: float
+    ) -> AddressCandidate | None:
+        # Parse
+        try:
+            parsed = await asyncio.to_thread(self._address_parser, text)
+        except Exception as e:
+            _logger.warning("Parse failed", text=text, error=str(e))
+            return None
+
+        if not parsed:
+            return None
+
+        # Validate
+        try:
+            validation = await asyncio.to_thread(self._address_validator, parsed, text)
+            if not validation.is_valid:
+                return None
+            parsed = validation.components or parsed
+        except Exception as e:
+            _logger.warning("Validation failed", text=text, error=str(e))
+            return None
+
+        # Geocode
+        geocode_result = await self._geocode_candidate(parsed, text)
+
+        return self._build_candidate(text, confidence, geocode_result, parsed)
+
+    def _generate_text_candidates(
+        self, ocr_results: OCRResult
+    ) -> list[tuple[str, float]]:
+        return generate_sliding_window_candidates(ocr_results)
+
+    async def _geocode_candidate(
+        self, parsed: dict[str, str], raw_text: str
+    ) -> GeocodeResult:
+        return await self._geocoder(parsed, raw_text)
+
+    def _build_candidate(
+        self,
+        text: str,
+        confidence: float,
+        geocode_result: GeocodeResult,
+        parsed: dict[str, str],
+    ) -> AddressCandidate:
+        base_conf = max(0.0, min(1.0, confidence))
+        combined_conf = base_conf
+
+        if geocode_result.confidence > 0:
+            combined_conf = min(1.0, (base_conf + geocode_result.confidence) / 2)
+        elif geocode_result.message:
+            combined_conf = max(0.0, base_conf * 0.5)
+
+        status = "pending"
+        if geocode_result.latitude is not None and geocode_result.longitude is not None:
+            status = "validated"
+        elif geocode_result.message:
+            status = "failed"
+
+        final_parsed = dict(parsed)
+        if geocode_result.resolved_label:
+            final_parsed.setdefault("resolved_label", geocode_result.resolved_label)
+
+        return AddressCandidate(
+            raw_text=text,
+            confidence=combined_conf,
+            parsed=final_parsed,
+            status=status,
+            message=geocode_result.message if status == "failed" else None,
+            latitude=geocode_result.latitude,
+            longitude=geocode_result.longitude,
+        )
+
+    def _get_dedupe_key(self, candidate: AddressCandidate) -> str:
+        if candidate.parsed and "resolved_label" in candidate.parsed:
+            return candidate.parsed["resolved_label"]
+        return (
+            str(sorted(candidate.parsed.items()))
+            if candidate.parsed
+            else candidate.raw_text
+        )
 
 
 _extraction_service: AddressExtractionService | None = None

@@ -3,10 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterable, Sequence
 
-from ortools.constraint_solver import pywrapcp, routing_enums_pb2
-
 from app.core.config import get_settings
 from app.core.logging import get_logger
+from app.domain.optimization import solve_tsp
 from app.schemas.jobs import RouteLeg
 from app.services.distance import DistanceMatrixResult, get_distance_matrix
 
@@ -19,6 +18,41 @@ class RouteComputationResult(Sequence[RouteLeg]):
     legs: list[RouteLeg]
     distance_provider: str
     uses_live_traffic: bool
+
+    @property
+    def total_distance_meters(self) -> float:
+        return sum(leg.distance_meters or 0.0 for leg in self.legs)
+
+    @property
+    def total_eta_seconds(self) -> int:
+        return sum(leg.eta_seconds or 0 for leg in self.legs)
+
+    @property
+    def total_static_eta_seconds(self) -> int:
+        return sum(
+            leg.static_eta_seconds
+            if leg.static_eta_seconds is not None
+            else (leg.eta_seconds or 0)
+            for leg in self.legs
+        )
+
+    @property
+    def total_traffic_delay_seconds(self) -> int:
+        return sum(leg.traffic_delay_seconds or 0 for leg in self.legs)
+
+    @property
+    def total_toll_cost(self) -> float | None:
+        cost = sum(leg.toll_cost or 0.0 for leg in self.legs)
+        return cost if cost > 0 else None
+
+    @property
+    def total_toll_currency(self) -> str | None:
+        currencies = {leg.toll_currency for leg in self.legs if leg.toll_currency}
+        return currencies.pop() if len(currencies) == 1 else None
+
+    @property
+    def contains_tolls(self) -> bool:
+        return any(leg.has_toll for leg in self.legs)
 
     def __iter__(self):  # pragma: no cover - delegating to list iterator
         return iter(self.legs)
@@ -70,48 +104,27 @@ def compute_route(
         return RouteComputationResult([leg], settings.routing_distance_provider, False)
 
     matrix = get_distance_matrix(nodes)
+
+    # Use domain logic to solve TSP
+    route_indices = solve_tsp(matrix.distances)
+
+    if route_indices is None:
+        _logger.warning("Route solver fallback", nodes=len(nodes))
+        legs = _fallback_route(nodes, matrix)
+        return RouteComputationResult(legs, matrix.provider, matrix.uses_live_traffic)
+
+    # Reconstruct route from indices
+    route: list[RouteLeg] = []
+    prev_node_idx = None
+    cumulative_distance = 0.0
+    cumulative_eta = 0
+
     distance_matrix = matrix.distances
     duration_matrix = matrix.durations
     static_duration_matrix = matrix.static_durations
     toll_matrix = matrix.tolls
 
-    depot_index = 0
-
-    manager = pywrapcp.RoutingIndexManager(len(nodes), 1, depot_index)
-    routing = pywrapcp.RoutingModel(manager)
-
-    def distance_callback(from_index: int, to_index: int) -> int:
-        from_node = manager.IndexToNode(from_index)
-        to_node = manager.IndexToNode(to_index)
-        return distance_matrix[from_node][to_node]
-
-    transit_callback_index = routing.RegisterTransitCallback(distance_callback)
-    routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
-
-    search_parameters = pywrapcp.DefaultRoutingSearchParameters()
-    search_parameters.first_solution_strategy = (
-        routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
-    )
-    search_parameters.local_search_metaheuristic = (
-        routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
-    )
-    search_parameters.time_limit.seconds = 5
-
-    solution = routing.SolveWithParameters(search_parameters)
-    if not solution:
-        _logger.warning("Route solver fallback", nodes=len(nodes))
-        legs = _fallback_route(nodes, matrix)
-        return RouteComputationResult(legs, matrix.provider, matrix.uses_live_traffic)
-
-    order = 0
-    index = routing.Start(0)
-    route: list[RouteLeg] = []
-    prev_node = None
-    cumulative_distance = 0.0
-    cumulative_eta = 0
-
-    while not routing.IsEnd(index):
-        node_index = manager.IndexToNode(index)
+    for order, node_index in enumerate(route_indices):
         label, lat, lon = nodes[node_index]
 
         distance_meters = 0.0
@@ -121,16 +134,18 @@ def compute_route(
         toll_currency = None
         toll_cost = None
         has_toll = False
-        if prev_node is not None:
-            distance_meters = float(distance_matrix[prev_node][node_index])
-            eta_seconds = int(duration_matrix[prev_node][node_index])
-            static_eta = int(static_duration_matrix[prev_node][node_index])
+
+        if prev_node_idx is not None:
+            distance_meters = float(distance_matrix[prev_node_idx][node_index])
+            eta_seconds = int(duration_matrix[prev_node_idx][node_index])
+            static_eta = int(static_duration_matrix[prev_node_idx][node_index])
             delay_seconds = eta_seconds - static_eta
-            toll_info = toll_matrix[prev_node][node_index]
+            toll_info = toll_matrix[prev_node_idx][node_index]
             if toll_info is not None:
                 has_toll = True
                 toll_currency = toll_info.currency_code
                 toll_cost = toll_info.cost
+
         cumulative_distance += distance_meters
         cumulative_eta += eta_seconds
 
@@ -152,9 +167,7 @@ def compute_route(
             )
         )
 
-        prev_node = node_index
-        order += 1
-        index = solution.Value(routing.NextVar(index))
+        prev_node_idx = node_index
 
     _logger.info(
         "Route computation finished",

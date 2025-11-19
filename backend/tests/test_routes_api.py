@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.routing.optimizer import RouteComputationResult
 from app.schemas.jobs import RouteLeg
 
 
@@ -24,7 +25,7 @@ def _stub_route(addresses):
                 cumulative_distance_meters=0.0,
             )
         )
-    return legs
+    return RouteComputationResult(legs, "stub", False)
 
 
 def test_route_endpoint_returns_route(monkeypatch):

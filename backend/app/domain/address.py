@@ -4,7 +4,10 @@ import re
 from dataclasses import dataclass
 from typing import Mapping
 
+from postal.parser import parse_address as libpostal_parse
+
 from app.core.logging import get_logger
+
 
 _logger = get_logger(__name__)
 
@@ -44,6 +47,11 @@ _NOISE_PATTERN = re.compile(
     flags=re.IGNORECASE,
 )
 
+_PHONE_PATTERN = re.compile(
+    r"(?:\+?1[-.\s]?)?(?:\(\d{3}\)|\d{3})[-.\s]?\d{3}[-.\s]?\d{4}",
+    flags=re.IGNORECASE,
+)
+
 _MIN_COMPONENTS = 2
 _REQUIRED_COMBINATIONS = [
     {"house_number", "road"},
@@ -54,6 +62,35 @@ _REQUIRED_COMBINATIONS = [
     {"house_number", "postcode"},
     {"po_box", "city"},
 ]
+
+
+def parse_address(text: str) -> Mapping[str, str] | None:
+    """Parse free-form text into structured address components using libpostal."""
+
+    cleaned = text.strip()
+    if not cleaned:
+        _logger.info("Address parsing skipped", reason="empty input")
+        return None
+
+    components = libpostal_parse(cleaned)
+    if not components:
+        _logger.info("Address parsing yielded no components", raw_text=text)
+        return None
+
+    parsed: dict[str, str] = {}
+    for value, component in components:
+        normalized_component = component.strip()
+        normalized_value = value.strip()
+        if not normalized_component or not normalized_value:
+            continue
+        parsed[normalized_component] = normalized_value
+
+    if not parsed:
+        _logger.info("Address parsing produced empty result", raw_text=text)
+        return None
+
+    _logger.info("Address parsed", raw_text=text, components=parsed)
+    return parsed
 
 
 def validate_parsed_address(
@@ -79,8 +116,11 @@ def validate_parsed_address(
         if _NOISE_PATTERN.search(normalized):
             continue
 
-        if key == "house_number" and not any(ch.isdigit() for ch in normalized):
-            continue
+        if key == "house_number":
+            if not any(ch.isdigit() for ch in normalized):
+                continue
+            if _is_part_of_phone_number(normalized, raw_text):
+                continue
 
         if key == "road" and not any(ch.isalpha() for ch in normalized):
             continue
@@ -122,3 +162,16 @@ def _normalize_postcode(postcode: str) -> str | None:
         return compact
 
     return None
+
+
+def _is_part_of_phone_number(house_number: str, raw_text: str) -> bool:
+    phones = _PHONE_PATTERN.findall(raw_text)
+    if not phones:
+        return False
+
+    text_without_phones = _PHONE_PATTERN.sub(" ", raw_text)
+    pattern = r"\b" + re.escape(house_number) + r"\b"
+    if re.search(pattern, text_without_phones):
+        return False
+
+    return True

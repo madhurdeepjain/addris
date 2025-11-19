@@ -131,16 +131,30 @@ export function RouteSummaryModal({
             </View>
           )}
           <ScrollView style={styles.modalScroll}>
-            {routeLegs.map((leg) => {
+            {routeLegs.map((leg, index) => {
               const hasDelay = leg.trafficDelaySeconds != null && leg.trafficDelaySeconds !== 0;
               const delayLabel = hasDelay ? formatDelay(leg.trafficDelaySeconds) : null;
               const delayStyle = leg.trafficDelaySeconds != null && leg.trafficDelaySeconds < 0
                 ? styles.routeLegMetaGain
                 : styles.routeLegMetaDelay;
+              
+              const isStart = index === 0;
+              const isEnd = index === routeLegs.length - 1;
+
               return (
                 <View key={leg.order} style={styles.routeStep}>
-                  <View style={styles.routeOrder}>
-                    <Text style={styles.routeOrderText}>{leg.order + 1}</Text>
+                  <View style={[
+                    styles.routeOrder, 
+                    isStart && styles.routeOrderStart,
+                    isEnd && styles.routeOrderEnd
+                  ]}>
+                    {isStart ? (
+                      <MaterialCommunityIcons name="map-marker" size={14} color="#fff" />
+                    ) : isEnd ? (
+                      <MaterialCommunityIcons name="flag-checkered" size={14} color="#fff" />
+                    ) : (
+                      <Text style={styles.routeOrderText}>{leg.order + 1}</Text>
+                    )}
                   </View>
                   <View style={styles.routeContent}>
                     <Text style={styles.routeLabel}>{leg.label}</Text>
@@ -341,7 +355,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   modalScroll: {
-    flex: 1,
+    // flex: 1, // Removed to allow content to determine height
   },
   routeStep: {
     flexDirection: 'row',
@@ -354,10 +368,16 @@ const styles = StyleSheet.create({
     width: 24,
     height: 24,
     borderRadius: 12,
-    backgroundColor: '#1d4ed8',
+    backgroundColor: '#64748b',
     alignItems: 'center',
     justifyContent: 'center',
     marginTop: 2,
+  },
+  routeOrderStart: {
+    backgroundColor: '#16a34a',
+  },
+  routeOrderEnd: {
+    backgroundColor: '#dc2626',
   },
   routeOrderText: {
     color: '#fff',
