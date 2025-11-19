@@ -11,6 +11,7 @@ from langchain_openai import ChatOpenAI
 from langchain_anthropic import ChatAnthropic
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_ollama import ChatOllama
+from langchain_xai import ChatXAI
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
@@ -92,7 +93,7 @@ class LLMService:
                     temperature=temperature,
                 )
 
-            elif provider == "grok":
+            elif provider == "xai":
                 api_key = self.settings.xai_api_key
                 if not api_key:
                     self.initialization_error = (
@@ -100,10 +101,9 @@ class LLMService:
                     )
                     _logger.warning(self.initialization_error)
                     return None
-                return ChatOpenAI(
+                return ChatXAI(
                     model=model,
                     api_key=api_key,
-                    base_url="https://api.x.ai/v1",
                     temperature=temperature,
                 )
 

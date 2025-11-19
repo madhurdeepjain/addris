@@ -44,6 +44,7 @@ dependencies = [
     { name = "langchain-google-genai" },
     { name = "langchain-ollama" },
     { name = "langchain-openai" },
+    { name = "langchain-xai" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.3.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "opencv-python" },
@@ -90,6 +91,7 @@ requires-dist = [
     { name = "langchain-google-genai", specifier = ">=3.1.0" },
     { name = "langchain-ollama", specifier = ">=1.0.0" },
     { name = "langchain-openai", specifier = ">=1.0.3" },
+    { name = "langchain-xai", specifier = ">=0.1.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10.0" },
     { name = "numpy", specifier = ">=1.26.0" },
     { name = "opencv-python", specifier = ">=4.11.0.86" },
@@ -1347,6 +1349,21 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/fa/2e/c833dcc379c1c086453708ef5eef7d4d1f808559ca4458bd6569d5d83ad7/langchain_text_splitters-1.0.0.tar.gz", hash = "sha256:d8580a20ad7ed10b432feb273e5758b2cc0902d094919629cec0e1ad691a6744", size = 264257, upload-time = "2025-10-17T14:33:41.743Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/1e/97/d362353ab04f865af6f81d4d46e7aa428734aa032de0017934b771fc34b7/langchain_text_splitters-1.0.0-py3-none-any.whl", hash = "sha256:f00c8219d3468f2c5bd951b708b6a7dd9bc3c62d0cfb83124c377f7170f33b2e", size = 33851, upload-time = "2025-10-17T14:33:40.46Z" },
+]
+
+[[package]]
+name = "langchain-xai"
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "langchain-core" },
+    { name = "langchain-openai" },
+    { name = "requests" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d8/44/fb44d72db8f407bf1bbf8ed4f9a8c1dd06a9833038da64aecd0564ab6a23/langchain_xai-1.0.0.tar.gz", hash = "sha256:b21f14400b8e288f876375a8f71e53b705cbce78129c01fe69d2b09c24a80181", size = 168145, upload-time = "2025-10-17T21:48:09.414Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/76/a9/1120a84264cf1d929e5b4c674d8002614d2d35940d834fb3613212c4e441/langchain_xai-1.0.0-py3-none-any.whl", hash = "sha256:d9961a14eb3038f52e1f64084829f01e154c79ae20db5c5669338efd219a5c59", size = 9184, upload-time = "2025-10-17T21:48:08.582Z" },
 ]
 
 [[package]]

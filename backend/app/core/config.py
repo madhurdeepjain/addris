@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     routing_use_traffic: bool = Field(True, alias="ADDRIS_ROUTING_USE_TRAFFIC")
 
     # LLM Configuration
-    llm_provider: Literal["openai", "anthropic", "google", "grok", "local"] = Field(
+    llm_provider: Literal["openai", "anthropic", "google", "xai", "local"] = Field(
         "openai", alias="ADDRIS_LLM_PROVIDER"
     )
     openai_api_key: str | None = Field(None, alias="ADDRIS_OPENAI_API_KEY")
