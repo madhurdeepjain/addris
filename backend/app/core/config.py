@@ -36,6 +36,23 @@ class Settings(BaseSettings):
     )
     routing_use_traffic: bool = Field(True, alias="ADDRIS_ROUTING_USE_TRAFFIC")
 
+    # LLM Configuration
+    llm_provider: Literal["openai", "anthropic", "google", "grok", "local"] = Field(
+        "openai", alias="ADDRIS_LLM_PROVIDER"
+    )
+    openai_api_key: str | None = Field(None, alias="ADDRIS_OPENAI_API_KEY")
+    anthropic_api_key: str | None = Field(None, alias="ADDRIS_ANTHROPIC_API_KEY")
+    google_api_key: str | None = Field(None, alias="ADDRIS_GOOGLE_API_KEY")
+    xai_api_key: str | None = Field(None, alias="ADDRIS_XAI_API_KEY")
+
+    llm_base_url: str | None = Field(None, alias="ADDRIS_LLM_BASE_URL")
+    llm_model: str = Field("gemma3:4b", alias="ADDRIS_LLM_MODEL")
+
+    # Extraction Strategy
+    extraction_strategy: Literal["ocr_sliding_window", "vlm", "ocr_llm"] = Field(
+        "vlm", alias="ADDRIS_EXTRACTION_STRATEGY"
+    )
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

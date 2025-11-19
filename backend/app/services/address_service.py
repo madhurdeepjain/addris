@@ -6,8 +6,10 @@ from typing import Awaitable, Callable, Sequence
 
 from fastapi import UploadFile
 
+from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.domain.text import generate_sliding_window_candidates
+from app.services.llm import get_llm_service
 from app.services.ocr import run_ocr
 from app.services.parsing import (
     AddressValidationResult,
@@ -65,8 +67,23 @@ class AddressExtractionService:
                 )
 
     async def _process_image(self, image_path: Path) -> list[AddressCandidate]:
-        _logger.info("Address extraction started", image_path=str(image_path))
+        settings = get_settings()
+        strategy = settings.extraction_strategy
 
+        _logger.info(
+            "Address extraction started", image_path=str(image_path), strategy=strategy
+        )
+
+        if strategy == "vlm":
+            return await self._process_with_vlm(image_path)
+        elif strategy == "ocr_llm":
+            return await self._process_with_ocr_llm(image_path)
+        else:
+            return await self._process_with_sliding_window(image_path)
+
+    async def _process_with_sliding_window(
+        self, image_path: Path
+    ) -> list[AddressCandidate]:
         # 1. Run OCR
         ocr_results = await asyncio.to_thread(self._ocr_runner, image_path)
         _logger.info(
@@ -100,6 +117,53 @@ class AddressExtractionService:
         _logger.info("Address extraction completed", total=len(addresses))
         return addresses
 
+    async def _process_with_vlm(self, image_path: Path) -> list[AddressCandidate]:
+        llm_service = get_llm_service()
+        extracted_data = await llm_service.extract_addresses_from_image(image_path)
+
+        candidates = []
+        for item in extracted_data:
+            # Convert LLM output to string values as expected by domain logic
+            parsed = {k: str(v) for k, v in item.items() if k != "raw_text" and v}
+            raw_text = str(item.get("raw_text", ""))
+            if not raw_text and parsed:
+                # Reconstruct raw text if missing
+                raw_text = ", ".join(parsed.values())
+
+            candidate = await self._process_structured_candidate(
+                parsed, raw_text, confidence=0.9
+            )
+            if candidate:
+                candidates.append(candidate)
+
+        return self._filter_duplicates(candidates)
+
+    async def _process_with_ocr_llm(self, image_path: Path) -> list[AddressCandidate]:
+        # 1. Run OCR
+        ocr_results = await asyncio.to_thread(self._ocr_runner, image_path)
+
+        # Combine all text for the LLM
+        full_text = "\n".join([text for text, _ in ocr_results])
+
+        # 2. LLM Extraction
+        llm_service = get_llm_service()
+        extracted_data = await llm_service.extract_addresses_from_text(full_text)
+
+        candidates = []
+        for item in extracted_data:
+            parsed = {k: str(v) for k, v in item.items() if k != "raw_text" and v}
+            raw_text = str(item.get("raw_text", ""))
+            if not raw_text and parsed:
+                raw_text = ", ".join(parsed.values())
+
+            candidate = await self._process_structured_candidate(
+                parsed, raw_text, confidence=0.9
+            )
+            if candidate:
+                candidates.append(candidate)
+
+        return self._filter_duplicates(candidates)
+
     def _filter_duplicates(
         self, candidates: list[AddressCandidate]
     ) -> list[AddressCandidate]:
@@ -117,8 +181,28 @@ class AddressExtractionService:
         for group in groups.values():
             validated = [c for c in group if c.status == "validated"]
             if validated:
-                # If we have validated candidates, only return those
-                results.extend(validated)
+                # Deduplicate validated candidates by their resolved_label
+                # This ensures we don't return identical addresses, but still allow
+                # different units/variations that share the same core components.
+                seen_labels = set()
+                unique_validated = []
+                # Sort by confidence descending to keep the best version
+                validated.sort(key=lambda x: x.confidence, reverse=True)
+
+                for v in validated:
+                    # Use resolved_label as the primary identity for a validated address
+                    label = v.parsed.get("resolved_label")
+                    if not label:
+                        # Fallback identity if no resolved label
+                        label = (
+                            str(sorted(v.parsed.items())) if v.parsed else v.raw_text
+                        )
+
+                    if label not in seen_labels:
+                        seen_labels.add(label)
+                        unique_validated.append(v)
+
+                results.extend(unique_validated)
             else:
                 # Otherwise, return the single best candidate based on confidence
                 best = max(group, key=lambda x: x.confidence)
@@ -153,6 +237,24 @@ class AddressExtractionService:
         if not parsed:
             return None
 
+        # Validate
+        try:
+            validation = await asyncio.to_thread(self._address_validator, parsed, text)
+            if not validation.is_valid:
+                return None
+            parsed = validation.components or parsed
+        except Exception as e:
+            _logger.warning("Validation failed", text=text, error=str(e))
+            return None
+
+        # Geocode
+        geocode_result = await self._geocode_candidate(parsed, text)
+
+        return self._build_candidate(text, confidence, geocode_result, parsed)
+
+    async def _process_structured_candidate(
+        self, parsed: dict[str, str], text: str, confidence: float
+    ) -> AddressCandidate | None:
         # Validate
         try:
             validation = await asyncio.to_thread(self._address_validator, parsed, text)
