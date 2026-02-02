@@ -472,7 +472,7 @@ Structured logging is enabled by default. Set `ADDRIS_DEBUG=true` for verbose re
 
 ## License
 
-This project is part of a course assignment.
+MIT
 
 ---
 
